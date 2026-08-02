@@ -31,6 +31,7 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /set_text\("HOME", "DEVICES", primary, secondary, meta, "UPDATED NOW"\)/);
   assert.match(watch, /s_page_index = device_page_for\(s_command_device_index\)/);
   assert.match(watch, /persist_cache\(\);\n      s_status = STATUS_OK/);
+  assert.match(watch, /if \(status == STATUS_COMMAND_PENDING\) \{\n      s_loading = true;\n      s_status = STATUS_COMMAND_PENDING;\n      render\(\);\n      return;\n    \}\n    cancel_response_timer\(\)/);
   assert.match(watch, /SELECT: TURN OFF/);
   assert.match(watch, /KIND_LOCK && !s_confirming/);
   assert.match(watch, /primary\[0\] = secondary\[0\] = meta\[0\] = footer\[0\] = '\\0'/);

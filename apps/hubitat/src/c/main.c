@@ -401,6 +401,12 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     return;
   }
   if (command == CMD_RESULT) {
+    if (status == STATUS_COMMAND_PENDING) {
+      s_loading = true;
+      s_status = STATUS_COMMAND_PENDING;
+      render();
+      return;
+    }
     cancel_response_timer();
     s_loading = false;
     copy_text(s_error_text, sizeof(s_error_text), error);
