@@ -1,6 +1,6 @@
 #include <pebble.h>
 
-#define MAX_DEVICES 6
+#define MAX_DEVICES 32
 #define CACHE_VERSION 1
 #define PERSIST_HEADER_KEY 7300
 #define PERSIST_DEVICE_KEY_BASE 7310

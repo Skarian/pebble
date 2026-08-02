@@ -1,6 +1,6 @@
 'use strict';
 
-var MAX_DEVICES = 6;
+var MAX_DEVICES = 32;
 var KIND = {unknown: 0, motion: 1, contact: 2, temperature: 3, switch: 4, lock: 5};
 var CONTROL = {ON: 1, OFF: 2, LOCK: 4, UNLOCK: 8};
 

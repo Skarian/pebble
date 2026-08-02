@@ -27,7 +27,7 @@ In Hubitat:
 
 1. Open **Apps** and add the built-in **Maker API** app.
 2. Authorize only the devices this watchapp should read or control. The watch
-   shows the first six authorized devices.
+   shows the first 32 authorized devices.
 3. Enable the local endpoint, cloud endpoint, or both as appropriate and press
    **Update**.
 4. Copy the displayed access token. Maker API tokens are
@@ -127,7 +127,7 @@ connected physical watch with the normal Pebble CLI workflow.
 | App UUID | `e3f31c74-63d6-4d6d-a8c7-1f8540ad2a59` |
 | QA loopback port | `8896` |
 | Watch cache header | persist key `7300` |
-| Watch device slots | persist keys `7310`–`7315` |
+| Watch device slots | persist keys `7310`–`7341` |
 | Phone settings | `hubitat.settings.v1` |
 | Phone authorized devices | `hubitat.authorized.v1` |
 | Phone diagnostics | `hubitat.diagnostics.v1` |

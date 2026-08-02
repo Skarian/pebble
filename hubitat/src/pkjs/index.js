@@ -55,7 +55,7 @@ function statusFor(error) {
   return STATUS.SERVICE;
 }
 
-function sendDevices(devices, requestId) {
+function sendDevices(devices, requestId, partial) {
   var fetchedAt = Math.floor(Date.now() / 1000);
   send({PROTOCOL: PROTOCOL, COMMAND: CMD_DATA_BEGIN, REQUEST_ID: requestId,
     FETCHED_AT: fetchedAt, COUNT: devices.length}, function () {
@@ -63,8 +63,8 @@ function sendDevices(devices, requestId) {
     function next() {
       if (index >= devices.length) {
         send({PROTOCOL: PROTOCOL, COMMAND: CMD_DATA_END, REQUEST_ID: requestId,
-          STATUS: devices.length ? STATUS.OK : STATUS.PARTIAL,
-          PARTIAL: devices.length ? 0 : 1});
+          STATUS: partial || !devices.length ? STATUS.PARTIAL : STATUS.OK,
+          PARTIAL: partial || !devices.length ? 1 : 0});
         return;
       }
       var device = devices[index];
@@ -97,7 +97,7 @@ function refresh(requestId) {
     localStorage.setItem(AUTHORIZED_IDS_KEY, JSON.stringify(devices.map(function (device) {
       return String(device.id);
     })));
-    sendDevices(devices, requestId);
+    sendDevices(devices, requestId, response.length > Model.MAX_DEVICES);
   });
 }
 
@@ -139,7 +139,7 @@ function settingsPage(settings) {
     '<body><main><h1>Hubitat</h1><p>Connect this watch to Maker API.</p>' +
     '<div class="privacy">Your access token stays in this app on your phone. It is never sent to the watch.</div>' +
     '<form id="form"><label for="token">Access token</label><input id="token" type="password" ' + (hasToken ? 'placeholder="Saved — leave blank to keep"' : 'required') + '>' +
-    '<p class="note">The watch shows up to six devices authorized in Maker API.</p>' +
+    '<p class="note">The watch shows up to 32 devices authorized in Maker API.</p>' +
     '<button type="submit">Save</button></form><p class="note">After saving, press Select on the watch to sync.</p><h2>Diagnostics</h2><p class="note">Sanitized failures contain no URL, token, device ID, or device value.</p>' +
     '<textarea readonly style="box-sizing:border-box;width:100%;height:130px">' + escapeHtml(diagnostics.report()) + '</textarea><a class="cancel" href="pebblejs://close">Cancel</a>' +
     '<script>document.getElementById("form").onsubmit=function(e){e.preventDefault();var v={token:document.getElementById("token").value};' +

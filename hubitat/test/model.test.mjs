@@ -19,11 +19,13 @@ test('normalizes representative Hubitat sensor and control data', () => {
 });
 
 test('selection is bounded and missing values remain explicit', () => {
-  const devices = Array.from({length: 9}, (_, index) => ({id: String(index), label: `D${index}`, attributes: {}}));
+  const devices = Array.from({length: 40}, (_, index) => ({id: String(index), label: `D${index}`, attributes: {}}));
   const values = Model.normalizeDevices(devices, []);
-  assert.equal(values.length, 6);
+  assert.equal(values.length, 32);
+  assert.equal(values.at(-1).id, '31');
   assert.equal(values[0].primary, 'no state');
   assert.equal(values[0].battery, 255);
+  assert.ok(1 + Model.MAX_DEVICES * 3 < 256, 'worst-case virtual list must fit uint8 page indexes');
 });
 
 test('generic safety sensors prefer their useful state over battery telemetry', () => {

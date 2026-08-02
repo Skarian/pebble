@@ -7,7 +7,7 @@ const phone = readFileSync(new URL('../src/pkjs/index.js', import.meta.url), 'ut
 const qa = readFileSync(new URL('../scripts/qa-screenshots.mjs', import.meta.url), 'utf8');
 
 test('watch keeps a bounded persistent last-good virtual list with stale response rejection', () => {
-  assert.match(watch, /MAX_DEVICES 6/);
+  assert.match(watch, /MAX_DEVICES 32/);
   assert.match(watch, /persist_write_data\(PERSIST_HEADER_KEY/);
   assert.match(watch, /response_id->value->uint16 != s_request_id/);
   assert.match(watch, /s_page_index \+ 1 < page_count\(\)/);

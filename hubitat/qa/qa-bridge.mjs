@@ -20,6 +20,7 @@ export const fakeRawDevices = [
 
 export function snapshotMessages(devices, {requestId = 1, fetchedAt = Math.floor(Date.now() / 1000), partial = false} = {}) {
   const normalized = Model.normalizeDevices(devices, []);
+  const truncated = devices.length > normalized.length;
   return [
     {PROTOCOL: 1, COMMAND: 3, REQUEST_ID: requestId, FETCHED_AT: fetchedAt, COUNT: normalized.length},
     ...normalized.map((device, index) => ({
@@ -28,7 +29,8 @@ export function snapshotMessages(devices, {requestId = 1, fetchedAt = Math.floor
       PRIMARY_VALUE: device.primary, SECONDARY_VALUE: device.secondary,
       BATTERY: device.battery, CONTROL_FLAGS: device.controlFlags
     })),
-    {PROTOCOL: 1, COMMAND: 5, REQUEST_ID: requestId, STATUS: partial ? 7 : 0, PARTIAL: partial ? 1 : 0}
+    {PROTOCOL: 1, COMMAND: 5, REQUEST_ID: requestId, STATUS: partial || truncated ? 7 : 0,
+      PARTIAL: partial || truncated ? 1 : 0}
   ];
 }
 
