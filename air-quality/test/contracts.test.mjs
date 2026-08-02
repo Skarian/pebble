@@ -63,12 +63,15 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
   assert.match(companion, /if \(refreshSensor\)/);
   assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
-  assert.match(watch, /AXIS_LEFT\[\] = \{"1H AGO", "1D AGO", "7D AGO"\}/);
-  assert.match(watch, /AXIS_MIDDLE\[\] = \{"30 MIN", "12 HR", "3D AGO"\}/);
+  assert.match(watch, /AXIS_LEFT\[\] = \{"-1 HR", "-1 DAY", "-1 WEEK"\}/);
+  assert.match(watch, /AXIS_MIDDLE\[\] = \{"-30 MIN", "-12 HR", "-3 DAYS"\}/);
   assert.doesNotMatch(watch, /if \(s_scale == SCALE_WEEK\)/);
   assert.match(watch, /GRAPH_COLUMNS 56/);
   assert.match(watch, /column_low = s_cache\.series/);
   assert.match(watch, /connect_gap = s_scale == SCALE_HOUR \? 6 : 2/);
+  assert.doesNotMatch(watch, /graphics_draw_line\(ctx, GPoint\(x, high_y\), GPoint\(x, low_y\)\)/);
+  assert.match(watch, /abs\(high_y - last_y\) >= 3/);
+  assert.match(watch, /left \+ \(4 \* \(right - left\)\) \/ 7/);
   assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);
 });
 

@@ -51,8 +51,8 @@ static uint8_t s_request_command;
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESS"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESS"};
 static const char *SCALE_NAMES[] = {"1 HOUR", "1 DAY", "1 WEEK"};
-static const char *AXIS_LEFT[] = {"1H AGO", "1D AGO", "7D AGO"};
-static const char *AXIS_MIDDLE[] = {"30 MIN", "12 HR", "3D AGO"};
+static const char *AXIS_LEFT[] = {"-1 HR", "-1 DAY", "-1 WEEK"};
+static const char *AXIS_MIDDLE[] = {"-30 MIN", "-12 HR", "-3 DAYS"};
 
 static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
                       GTextAlignment align, GColor color) {
@@ -277,22 +277,28 @@ static void draw_chart(GContext *ctx, GRect bounds) {
       int low_y = graph_y(low, minimum, maximum, top, bottom);
       int high_y = graph_y(high, minimum, maximum, top, bottom);
       int last_y = graph_y(last, minimum, maximum, top, bottom);
-      if (low != high) {
-        graphics_draw_line(ctx, GPoint(x, high_y), GPoint(x, low_y));
-      }
       GPoint point = GPoint(x, last_y);
       if (has_previous && column - previous_column <= connect_gap)
         graphics_draw_line(ctx, previous, point);
-      if (available <= 20) graphics_fill_circle(ctx, point, 2);
+      if (abs(high_y - last_y) >= 3)
+        graphics_fill_circle(ctx, GPoint(x, high_y), 1);
+      if (low_y != high_y && abs(low_y - last_y) >= 3)
+        graphics_fill_circle(ctx, GPoint(x, low_y), 1);
+      graphics_fill_circle(ctx, point, available <= 20 ? 2 : 1);
       previous = point;
       has_previous = true;
       previous_column = column;
     }
   }
+  int middle_x = s_scale == SCALE_WEEK ? left + (4 * (right - left)) / 7
+                                       : (left + right) / 2;
+  graphics_draw_line(ctx, GPoint(left, bottom), GPoint(left, bottom - 4));
+  graphics_draw_line(ctx, GPoint(middle_x, bottom), GPoint(middle_x, bottom - 4));
+  graphics_draw_line(ctx, GPoint(right, bottom), GPoint(right, bottom - 4));
   draw_text(ctx, AXIS_LEFT[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
             GRect(left, bottom + 1, 68, 22), GTextAlignmentLeft, GColorBlack);
   draw_text(ctx, AXIS_MIDDLE[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(bounds.size.w / 2 - 34, bottom + 1, 68, 22),
+            GRect(middle_x - 34, bottom + 1, 68, 22),
             GTextAlignmentCenter, GColorBlack);
   draw_text(ctx, "NOW", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
             GRect(right - 45, bottom + 1, 45, 22), GTextAlignmentRight, GColorBlack);

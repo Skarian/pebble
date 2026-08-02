@@ -66,8 +66,8 @@ database retains eight days.
 All three chart scales use the same rolling time-series view. The graph has 56
 time columns, which is the useful horizontal resolution at Pebble size. Every
 stored reading in the selected hour, day, or week contributes to its column.
-The thin vertical mark preserves that column's real minimum and maximum, while
-the line connects its last actual reading. Spikes are not averaged away. The
+Small dots preserve meaningful minimums and maximums, while the thin line joins
+the last actual reading in each column. Spikes are not averaged away. The
 average below the chart is calculated from all readings in the window.
 
 The first import can take a few seconds. If the sensor does not offer saved

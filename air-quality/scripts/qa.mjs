@@ -137,13 +137,24 @@ function snapshot(co2, options = {}) {
     pressure: options.pressure ?? 1008.6,
     battery: options.battery ?? 87,
   };
+  const scale = options.scale || 0;
   const points = Array.from({length: Model.GRAPH_COLUMNS}, (_, index) => {
-    const wave = Math.sin(index / 5.5);
-    const spike = index === 18 || index === 41 ? 105 : 0;
+    if (scale === 0 && index % 5 !== 0 && index !== Model.GRAPH_COLUMNS - 1) return {};
+    if (scale === 1 && index >= 31 && index <= 33) return {};
+    if (scale === 2 && index >= 27 && index <= 29) return {};
+    const progress = index / (Model.GRAPH_COLUMNS - 1);
+    const wave = scale === 0 ? Math.sin(index / 7) * 0.45
+      : scale === 1 ? Math.sin((progress - 0.25) * Math.PI * 2)
+        : Math.sin(progress * Math.PI * 6) * 0.75 + (progress - 0.5) * 0.4;
+    const occupied = scale === 1 && index >= 15 && index <= 42 ? 95 : 0;
+    const weekend = scale === 2 && index < 16 ? -65 : 0;
+    const spike = (scale === 0 && index === 40) || (scale === 1 && index === 39) ||
+      (scale === 2 && index === 45) ? 120 : 0;
+    const offset = wave * 80 + occupied + weekend;
     return {
-      co2: Math.max(420, Math.round(co2 - 45 + wave * 70 + spike)),
-      co2Min: Math.max(400, Math.round(co2 - 60 + wave * 70)),
-      co2Max: Math.round(co2 - 30 + wave * 70 + spike),
+      co2: Math.max(420, Math.round(co2 - 45 + offset + spike)),
+      co2Min: Math.max(400, Math.round(co2 - 58 + offset)),
+      co2Max: Math.round(co2 - 32 + offset + spike),
       temperature: base.temperature - 0.7 + wave * 0.8,
       temperatureMin: base.temperature - 0.9 + wave * 0.8,
       temperatureMax: base.temperature - 0.5 + wave * 0.8,
@@ -162,7 +173,7 @@ function snapshot(co2, options = {}) {
     });
   }
   if (options.missingHistory) points.splice(0, points.length);
-  return {location: 'HOME', current: base, points, scale: options.scale || 0,
+  return {location: 'HOME', current: base, points, scale,
     stale: Boolean(options.stale)};
 }
 
