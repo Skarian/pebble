@@ -37,10 +37,13 @@ static AppTimer *s_timer;
 static AirCache s_cache;
 static bool s_has_cache;
 static bool s_loading;
+static bool s_scale_loading;
 static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
 static uint16_t s_request_id;
 static uint8_t s_scale;
+static uint8_t s_pending_scale;
+static uint8_t s_request_command;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESS"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESS"};
@@ -320,25 +323,35 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 }
 
 static void refresh_timeout(void *context) {
-  s_timer = NULL; s_loading = false; s_status = STATUS_TIMEOUT;
+  s_timer = NULL;
+  if (s_scale_loading) {
+    s_scale_loading = false;
+    return;
+  }
+  s_loading = false; s_status = STATUS_TIMEOUT;
   layer_mark_dirty(s_canvas);
 }
 
 static void request_data(uint8_t command) {
-  if (s_loading) return;
+  if (s_loading || s_scale_loading) return;
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
+    if (command == COMMAND_SCALE) return;
     s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas); return;
   }
   s_request_id++;
+  s_request_command = command;
   dict_write_uint8(iter, MESSAGE_KEY_PROTOCOL, 1);
   dict_write_uint8(iter, MESSAGE_KEY_COMMAND, command);
   dict_write_uint16(iter, MESSAGE_KEY_REQUEST_ID, s_request_id);
-  dict_write_uint8(iter, MESSAGE_KEY_SCALE, s_scale);
+  dict_write_uint8(iter, MESSAGE_KEY_SCALE,
+                   command == COMMAND_SCALE ? s_pending_scale : s_scale);
   if (app_message_outbox_send() != APP_MSG_OK) {
+    if (command == COMMAND_SCALE) return;
     s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas); return;
   }
-  s_loading = true; s_status = STATUS_LOADING;
+  if (command == COMMAND_SCALE) s_scale_loading = true;
+  else { s_loading = true; s_status = STATUS_LOADING; }
   if (s_timer) app_timer_cancel(s_timer);
   s_timer = app_timer_register(RESPONSE_TIMEOUT_MS, refresh_timeout, NULL);
   layer_mark_dirty(s_canvas);
@@ -368,12 +381,19 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   Tuple *request = dict_find(iter, MESSAGE_KEY_REQUEST_ID);
   if (!request || request->value->uint16 != s_request_id) return;
   if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
+  bool scale_response = s_request_command == COMMAND_SCALE;
+  s_scale_loading = false;
   s_loading = false;
   s_status = status->value->uint8;
+  if (scale_response && s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
+    s_status = STATUS_OK;
+    return;
+  }
   if (s_status == STATUS_OK || s_status == STATUS_PARTIAL) {
     Tuple *observed = dict_find(iter, MESSAGE_KEY_OBSERVED_AT);
     Tuple *location = dict_find(iter, MESSAGE_KEY_LOCATION);
     if (!observed || !location || !dict_find(iter, MESSAGE_KEY_CO2)) {
+      if (scale_response) { s_status = STATUS_OK; return; }
       s_status = STATUS_SERVICE; layer_mark_dirty(s_canvas); return;
     }
     if (s_has_cache && observed->value->uint32 < s_cache.observed_at) {
@@ -418,22 +438,24 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
   if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
+  if (s_scale_loading) { s_scale_loading = false; return; }
   s_loading = false; s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas);
 }
 
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
   if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
+  if (s_scale_loading) { s_scale_loading = false; return; }
   s_loading = false; s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas);
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_loading) return;
+  if (s_loading || s_scale_loading) return;
   if (s_status >= STATUS_SETUP && s_status <= STATUS_SERVICE) {
     request_refresh();
   } else if (s_page == 0) {
     request_refresh();
   } else {
-    s_scale = (s_scale + 1) % SCALE_COUNT;
+    s_pending_scale = (s_scale + 1) % SCALE_COUNT;
     request_data(COMMAND_SCALE);
   }
 }

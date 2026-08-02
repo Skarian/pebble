@@ -20,7 +20,7 @@ test('watch keeps a new versioned last-good cache and rejects stale responses', 
 
 test('navigation is one bounded current page plus four charts', () => {
   assert.match(watch, /PAGE_COUNT 5/);
-  assert.match(watch, /if \(s_loading\) return/);
+  assert.match(watch, /if \(s_loading \|\| s_scale_loading\) return/);
   assert.match(watch, /if \(s_page > 0\)/);
   assert.match(watch, /s_page \+ 1 < PAGE_COUNT/);
   assert.deepEqual(packageJson.pebble.messageKeys.CO2, 10);
@@ -53,10 +53,14 @@ test('typography and plain headers keep the CPAP hierarchy', () => {
   assert.doesNotMatch(watch, /graphics_fill_rect\(ctx, GRect\(0, 0, bounds\.size\.w, 30\)/);
 });
 
-test('refresh blocks the whole screen and charts cycle hour day week scales', () => {
+test('current refresh blocks while chart scale changes stay nonblocking', () => {
   assert.match(watch, /if \(s_loading\) draw_state/);
-  assert.match(watch, /s_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
+  assert.match(watch, /s_pending_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
   assert.match(watch, /request_data\(COMMAND_SCALE\)/);
+  assert.match(watch, /if \(command == COMMAND_SCALE\) s_scale_loading = true/);
+  assert.doesNotMatch(watch, /if \(s_scale_loading\) draw_state/);
+  assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
+  assert.match(companion, /if \(refreshSensor\)/);
   assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
   assert.match(watch, /if \(s_scale == SCALE_WEEK\)/);
   assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);

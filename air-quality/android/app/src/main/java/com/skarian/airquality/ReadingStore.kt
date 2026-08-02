@@ -28,23 +28,35 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
 
     @Synchronized
     fun save(reading: AranetReading) {
-        val values = ContentValues().apply {
-            put("observed_at", reading.observedAtEpochSeconds)
-            put("address", reading.address)
-            put("device_name", reading.deviceName)
-            put("co2", reading.co2Ppm)
-            put("temperature_x10", reading.temperatureX10)
-            put("humidity_x10", reading.humidityX10)
-            put("pressure_x10", reading.pressureX10)
-            put("battery", reading.batteryPercent)
-            put("co2_state", reading.co2State)
-        }
-        writableDatabase.insertWithOnConflict("readings", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        writableDatabase.insertWithOnConflict(
+            "readings", null, values(reading), SQLiteDatabase.CONFLICT_REPLACE,
+        )
         writableDatabase.delete(
             "readings",
             "observed_at < ?",
             arrayOf((reading.observedAtEpochSeconds - 8L * 24 * 60 * 60).toString()),
         )
+    }
+
+    @Synchronized
+    fun saveAll(readings: List<AranetReading>) {
+        if (readings.isEmpty()) return
+        writableDatabase.beginTransaction()
+        try {
+            readings.forEach { reading ->
+                writableDatabase.insertWithOnConflict(
+                    "readings", null, values(reading), SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            val newest = readings.maxOf { it.observedAtEpochSeconds }
+            writableDatabase.delete(
+                "readings", "observed_at < ?",
+                arrayOf((newest - 8L * 24 * 60 * 60).toString()),
+            )
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+        }
     }
 
     @Synchronized
@@ -84,4 +96,16 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
             nowEpochSeconds,
             scale,
         )
+
+    private fun values(reading: AranetReading): ContentValues = ContentValues().apply {
+        put("observed_at", reading.observedAtEpochSeconds)
+        put("address", reading.address)
+        put("device_name", reading.deviceName)
+        put("co2", reading.co2Ppm)
+        put("temperature_x10", reading.temperatureX10)
+        put("humidity_x10", reading.humidityX10)
+        put("pressure_x10", reading.pressureX10)
+        put("battery", reading.batteryPercent)
+        put("co2_state", reading.co2State)
+    }
 }

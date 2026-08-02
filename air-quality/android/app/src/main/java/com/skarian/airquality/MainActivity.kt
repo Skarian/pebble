@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -22,6 +23,7 @@ class MainActivity : Activity() {
     private lateinit var currentReading: TextView
     private lateinit var detailReading: TextView
     private lateinit var serviceStatus: TextView
+    private var historyImporting = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,11 +39,13 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.chooseSensor).setOnClickListener { chooseSensor() }
         findViewById<Button>(R.id.refreshNow).setOnClickListener { refreshNow() }
         updateUi()
+        maybeImportHistory()
     }
 
     override fun onResume() {
         super.onResume()
         updateUi()
+        maybeImportHistory()
     }
 
     override fun onPause() {
@@ -103,9 +107,12 @@ class MainActivity : Activity() {
         settings.sensorAddress = device.address
         settings.sensorName = device.name
         settings.monitoringEnabled = true
+        settings.historyImportedAddress = null
+        settings.historyAttemptedAddress = null
         device.reading?.let { reading -> ReadingStore(this).use { it.save(reading) } }
         startMonitoring()
         updateUi()
+        maybeImportHistory(force = true)
     }
 
     private fun refreshNow() {
@@ -130,9 +137,54 @@ class MainActivity : Activity() {
             else {
                 ReadingStore(this).use { it.save(reading) }
                 settings.monitoringEnabled = true
-                startMonitoring()
-                updateUi()
+                if (settings.historyImportedAddress == address) {
+                    startMonitoring()
+                    updateUi()
+                } else {
+                    settings.historyAttemptedAddress = null
+                    maybeImportHistory(force = true)
+                }
             }
+        }
+    }
+
+    private fun maybeImportHistory(force: Boolean = false) {
+        val address = settings.sensorAddress ?: return
+        if (historyImporting || settings.historyImportedAddress == address) return
+        if (!force && settings.historyAttemptedAddress == address) return
+        val scanner = AranetScanner(this)
+        if (!scanner.hasPermissions() || !scanner.bluetoothEnabled()) return
+        val now = Instant.now().epochSecond
+        val current = ReadingStore(this).use {
+            it.snapshot(address, settings.watchName, now, ChartScale.HOUR)?.current
+        } ?: return
+
+        historyImporting = true
+        settings.historyAttemptedAddress = address
+        stopService(Intent(this, AranetMonitorService::class.java))
+        serviceStatus.text = "Importing saved Aranet4 history..."
+        AranetHistoryReader(applicationContext).import(
+            address = address,
+            deviceName = settings.sensorName ?: "Aranet4",
+            batteryPercent = current.batteryPercent,
+            co2State = current.co2State,
+        ) { result ->
+            historyImporting = false
+            val message = result.fold(
+                onSuccess = { readings ->
+                    ReadingStore(this).use { it.saveAll(readings) }
+                    settings.historyImportedAddress = address
+                    Log.i(HISTORY_LOG_TAG, "Imported ${readings.size} saved readings")
+                    "Imported ${readings.size} saved readings."
+                },
+                onFailure = { error ->
+                    Log.w(HISTORY_LOG_TAG, "Saved history import failed: ${error.message}")
+                    "Saved history unavailable. New readings will still be saved."
+                },
+            )
+            startMonitoring()
+            updateUi()
+            serviceStatus.text = message
         }
     }
 
@@ -153,9 +205,9 @@ class MainActivity : Activity() {
             return
         }
         val now = Instant.now().epochSecond
-            val snapshot = ReadingStore(this).use {
-                it.snapshot(address, settings.watchName, now, ChartScale.HOUR)
-            }
+        val snapshot = ReadingStore(this).use {
+            it.snapshot(address, settings.watchName, now, ChartScale.HOUR)
+        }
         if (snapshot == null) {
             currentReading.text = "No reading yet"
             detailReading.text = "Tap Refresh now."
@@ -190,6 +242,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val HISTORY_LOG_TAG = "AirQualityHistory"
         private const val REQUEST_BLUETOOTH = 200
         private const val REQUEST_NOTIFICATIONS = 201
     }

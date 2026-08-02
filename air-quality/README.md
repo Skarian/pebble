@@ -59,15 +59,14 @@ If the sensor appears without a reading, open Aranet Home and enable
 
 ## How history works
 
-The companion saves readings locally while its monitoring notification is
-running. One-hour and one-day views use a line through averaged time buckets;
-the one-week view uses daily average bars. Short ranges make changes visible,
-while week bars remain anchored for honest day-to-day comparison. The database
-retains eight days.
+After you choose a sensor, the companion imports up to eight days of readings
+already stored in the Aranet4. It then saves each new reading it sees. One-hour
+and one-day views use a line through averaged time buckets; the one-week view
+uses daily average bars. The database retains eight days.
 
-History starts when the companion is installed. It does not import older
-records stored inside the Aranet4, so the hour view fills first, followed by
-the day and week views.
+The first import can take a few seconds. If the sensor does not offer saved
+history, new readings still build the charts normally. Tap **Refresh now** in
+the companion to retry the import.
 
 No data is uploaded and no bridge server is used. Removing the Android app
 removes its saved readings and selected sensor.
@@ -132,7 +131,7 @@ Useful primary references:
 
 - Watchapp UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
 - Android package: `com.skarian.airquality`
-- Watch cache: key `4102`, version `2`
+- Watch cache: key `4102`, version `3`
 - Android database: `airquality-readings.db`
 - Notification ID/channel: `4102` / `airquality-monitor`
 - QA scratch: `/private/tmp/airquality-qa-*`

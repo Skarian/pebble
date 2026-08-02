@@ -22,4 +22,12 @@ class CompanionSettings(context: Context) {
     var monitoringEnabled: Boolean
         get() = preferences.getBoolean("monitoring", false)
         set(value) { preferences.edit().putBoolean("monitoring", value).apply() }
+
+    var historyImportedAddress: String?
+        get() = preferences.getString("history_imported_address", null)
+        set(value) { preferences.edit().putString("history_imported_address", value).apply() }
+
+    var historyAttemptedAddress: String?
+        get() = preferences.getString("history_attempted_address", null)
+        set(value) { preferences.edit().putString("history_attempted_address", value).apply() }
 }
