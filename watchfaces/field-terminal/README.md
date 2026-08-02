@@ -1,7 +1,7 @@
 # Field Terminal
 
-An original retro-futurist CRT watchface for Pebble Time 2 (Emery), inspired by
-wrist-mounted field instruments.
+Field Terminal is an experimental retro-futurist CRT watchface for Pebble Time
+2 (Emery), inspired by wrist-mounted field instruments.
 
 <img src="presented_emery.png" width="200" alt="Field Terminal watchface">
 

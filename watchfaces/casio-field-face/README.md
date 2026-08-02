@@ -1,8 +1,8 @@
 # Casio Field Face Alloy prototype
 
-The original Casio-inspired Field Face prototype for Pebble Time 2. It uses
-embedded JavaScript on the watch to present a large digital clock, compact date,
-and reserved weather and battery areas.
+This is the original experimental Casio-inspired Field Face prototype for
+Pebble Time 2. It uses embedded JavaScript on the watch to present a large
+digital clock, compact date, and reserved weather and battery areas.
 
 <img src="design-studies/original-qemu.png" width="240" alt="Casio Field Face running in QEMU">
 

@@ -1,8 +1,9 @@
 # Casio Field Face
 
-A high-contrast digital watchface inspired by practical Casio field watches.
-The Pebble Time 2 layout keeps the clock dominant, adds a compact date, and
-reserves clear instrument rows for weather and battery status.
+Casio Field Face is an experimental high-contrast watchface inspired by
+practical Casio field watches. The Pebble Time 2 layout keeps the clock
+dominant, adds a compact date, and reserves clear instrument rows for weather
+and battery status.
 
 <img src="emulator-current.png" width="200" alt="Casio Field Face on Pebble Time 2">
 

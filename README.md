@@ -1,7 +1,8 @@
 # Pebble projects
 
-Pebble apps and watchfaces built for the modern Rebble SDK, with a focus on the
-Pebble Time 2. Each product has its own install, usage, and development guide.
+These are some of my personal Pebble projects. A few solve everyday problems;
+others are experiments I built while learning the modern Rebble SDK and Pebble
+Time 2 hardware. Each project has its own usage and development notes.
 
 ## Apps
 
@@ -24,7 +25,7 @@ opening the phone app.
 Check selected Hubitat sensors and control authorized switches and locks from
 Pebble.
 
-<img src="apps/hubitat/screenshots/hubitat.png" width="200" alt="Hubitat overview on Pebble">
+<img src="apps/hubitat/screenshots/hubitat.png" width="200" alt="Hubitat controlling a desk lamp from Pebble">
 
 [Browse all apps →](apps)
 
@@ -32,14 +33,14 @@ Pebble.
 
 ### [Field Terminal](watchfaces/field-terminal)
 
-A green phosphor field instrument with time, date, battery, and a brief
-minute-change signal animation.
+An experimental green phosphor field instrument with time, date, battery, and
+a brief minute-change signal animation.
 
 <img src="watchfaces/field-terminal/presented_emery.png" width="200" alt="Field Terminal watchface">
 
 ### [Casio Field Face](watchfaces/casio-field-face-c)
 
-A restrained digital field-watch face with a large clock, compact date, and
+An experimental digital field-watch face with a large clock, compact date, and
 high-contrast instrument styling.
 
 <img src="watchfaces/casio-field-face-c/emulator-current.png" width="200" alt="Casio Field Face on Pebble Time 2">

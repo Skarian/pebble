@@ -4,7 +4,7 @@ Hubitat brings a small set of home sensors and controls to Pebble Time 2. It can
 show motion, contact, temperature, and battery readings. Authorized switches
 and locks can also be controlled from the watch.
 
-<img src="screenshots/hubitat.png" width="200" alt="Hubitat overview on Pebble">
+<img src="screenshots/hubitat.png" width="200" alt="Hubitat controlling a desk lamp from Pebble">
 
 ## Using the watch app
 
