@@ -262,18 +262,16 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   graphics_draw_line(ctx, GPoint(left, bottom), GPoint(right, bottom));
   GPoint previous = GPointZero;
   bool has_previous = false;
-  int previous_column = -GRAPH_COLUMNS;
-  int connect_gap = s_scale == SCALE_HOUR ? 6 : 2;
   for (int column = 0; column < GRAPH_COLUMNS; column++) {
     int16_t value = s_cache.series[metric][column];
     int x = left + (column * (right - left)) / (GRAPH_COLUMNS - 1);
     if (value != INT16_MIN) {
       GPoint point = GPoint(x, graph_y(value, minimum, maximum, top, bottom));
-      bool connects_previous = has_previous && column - previous_column <= connect_gap;
+      bool connects_previous = has_previous;
       int next_column = column + 1;
       while (next_column < GRAPH_COLUMNS && s_cache.series[metric][next_column] == INT16_MIN)
         next_column++;
-      bool connects_next = next_column < GRAPH_COLUMNS && next_column - column <= connect_gap;
+      bool connects_next = next_column < GRAPH_COLUMNS;
       if (connects_previous) {
         graphics_draw_line(ctx, previous, point);
       } else if (!connects_next) {
@@ -283,7 +281,6 @@ static void draw_chart(GContext *ctx, GRect bounds) {
       }
       previous = point;
       has_previous = true;
-      previous_column = column;
     }
   }
   int middle_x = s_scale == SCALE_WEEK ? left + (4 * (right - left)) / 7

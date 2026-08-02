@@ -72,7 +72,7 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /GRAPH_COLUMNS 56/);
   assert.match(watch, /int16_t value = s_cache\.series/);
   assert.match(watch, /series->length != GRAPH_COLUMNS \* 2/);
-  assert.match(watch, /connect_gap = s_scale == SCALE_HOUR \? 6 : 2/);
+  assert.doesNotMatch(watch, /connect_gap|previous_column/);
   assert.doesNotMatch(watch, /graphics_fill_circle\(ctx, point/);
   assert.doesNotMatch(watch, /high_y|low_y|last_y/);
   assert.match(watch, /left \+ \(4 \* \(right - left\)\) \/ 7/);
