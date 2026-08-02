@@ -5,6 +5,17 @@ import {readFileSync} from 'node:fs';
 const watch = readFileSync(new URL('../src/c/main.c', import.meta.url), 'utf8');
 const phone = readFileSync(new URL('../src/pkjs/index.js', import.meta.url), 'utf8');
 const qa = readFileSync(new URL('../scripts/qa-screenshots.mjs', import.meta.url), 'utf8');
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+test('app packages a dedicated one-bit menu icon', () => {
+  assert.deepEqual(pkg.pebble.resources.media, [{
+    type: 'bitmap',
+    name: 'IMAGE_MENU_ICON',
+    file: 'images/menu_icon.png',
+    menuIcon: true,
+    memoryFormat: '1Bit'
+  }]);
+});
 
 test('watch keeps a bounded persistent last-good virtual list with stale response rejection', () => {
   assert.match(watch, /MAX_DEVICES 32/);

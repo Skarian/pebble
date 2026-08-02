@@ -119,6 +119,11 @@ The installable artifact is:
 build/hubitat.pbw
 ```
 
+The app artwork is kept in `resources/images/`: a reusable 144-pixel SVG
+master, a separately pixel-tuned 25-pixel watch-menu SVG, and its one-bit PNG.
+Top-level `icon_80x80.png` and `icon_144x144.png` are the matching publication
+exports.
+
 Install to the emulator only while holding the shared lock, or install to a
 connected physical watch with the normal Pebble CLI workflow.
 
@@ -147,3 +152,4 @@ connected physical watch with the normal Pebble CLI workflow.
 - `scripts/qa-screenshots.mjs` — build, isolated emulator session, injection,
   capture, board assembly, and deterministic cleanup.
 - `test/` — normalization, security, request/cache, QA, and isolation contracts.
+- `resources/images/` — logo source artwork and the packaged watch-menu icon.
