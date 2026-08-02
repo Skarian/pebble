@@ -68,6 +68,11 @@ healthy/elevated/hazardous readings, missing and stale data, every graph, and
 all refresh failures. Fake data comes from the QA script; the production app
 contains no fixtures, hidden navigation, localhost route, or QA mode.
 
+The watch UI follows CPAP's proven type hierarchy: a 42-point primary value,
+24-point bold metric rows and chart statistics, 28-point state titles, and
+18-point bold state copy and button instructions. Labels are shortened instead
+of shrinking their text.
+
 The runner waits for `/private/tmp/pebble-emulator-qa.lock`, uses isolated Emery
 flash, stops only the QEMU process it started, restores the previous flash, and
 releases the lock on every exit.

@@ -38,8 +38,10 @@ static uint8_t s_page;
 static uint16_t s_request_id;
 static char s_error[49];
 
-static const char *METRIC_NAMES[] = {"AQI", "PM2.5", "CO2", "TEMP", "HUMIDITY"};
+static const char *METRIC_NAMES[] = {"AQI", "PM2.5", "CO2", "TEMP", "RH"};
+static const char *GRAPH_NAMES[] = {"AQI", "PM2.5", "CO2", "TEMP", "HUMIDITY"};
 static const char *METRIC_UNITS[] = {"", "ug/m3", "ppm", "C", "%"};
+static const char *WEEKDAYS[] = {"S", "M", "T", "W", "T", "F", "S"};
 
 static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
                       GTextAlignment align, GColor color) {
@@ -60,6 +62,8 @@ static const char *category(uint16_t aqi) {
 static void format_metric(char *buffer, size_t size, int metric, uint16_t value) {
   if (value == UNAVAILABLE) {
     snprintf(buffer, size, "--");
+  } else if (metric == 1 && value >= 1000) {
+    snprintf(buffer, size, "%u %s", value / 10, METRIC_UNITS[metric]);
   } else if (metric == 1 || metric == 3 || metric == 4) {
     snprintf(buffer, size, "%u.%u %s", value / 10, value % 10, METRIC_UNITS[metric]);
   } else {
@@ -96,9 +100,9 @@ static void draw_footer(GContext *ctx, GRect bounds) {
   else if (s_cache.flags & FLAG_STALE) snprintf(footer, sizeof(footer), "STALE  %s", age);
   else snprintf(footer, sizeof(footer), "%s", age);
   graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(8, bounds.size.h - 23), GPoint(bounds.size.w - 8, bounds.size.h - 23));
+  graphics_draw_line(ctx, GPoint(8, bounds.size.h - 19), GPoint(bounds.size.w - 8, bounds.size.h - 19));
   draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-            GRect(5, bounds.size.h - 22, bounds.size.w - 10, 22), GTextAlignmentCenter, GColorBlack);
+            GRect(5, bounds.size.h - 18, bounds.size.w - 10, 18), GTextAlignmentCenter, GColorBlack);
 }
 
 static void draw_state(GContext *ctx, GRect bounds) {
@@ -112,16 +116,13 @@ static void draw_state(GContext *ctx, GRect bounds) {
   else if (s_status == STATUS_TIMEOUT) { title = "ERROR"; body = "Refresh timed out"; footer = "PRESS SELECT TO RETRY"; }
   else if (s_status == STATUS_SERVICE) { title = "ERROR"; body = "Aranet is unavailable"; footer = "PRESS SELECT TO RETRY"; }
   draw_header(ctx, bounds, "AIR QUALITY");
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 3);
-  graphics_draw_circle(ctx, GPoint(bounds.size.w / 2, 69), 18);
-  graphics_draw_line(ctx, GPoint(bounds.size.w / 2 - 8, 69), GPoint(bounds.size.w / 2 + 8, 69));
-  draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 91, bounds.size.w - 16, 34), GTextAlignmentCenter, GColorBlack);
-  draw_text(ctx, body, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-            GRect(15, 126, bounds.size.w - 30, 62), GTextAlignmentCenter, GColorBlack);
-  draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-            GRect(8, bounds.size.h - 28, bounds.size.w - 16, 24), GTextAlignmentCenter, GColorBlack);
+  bool title_only = body[0] == '\0' && footer[0] == '\0';
+  draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
+            GRect(8, title_only ? 92 : 68, bounds.size.w - 16, 36), GTextAlignmentCenter, GColorBlack);
+  draw_text(ctx, body, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(14, 108, bounds.size.w - 28, 58), GTextAlignmentCenter, GColorBlack);
+  draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(8, 184, bounds.size.w - 16, 28), GTextAlignmentCenter, GColorBlack);
 }
 
 static void draw_current(GContext *ctx, GRect bounds) {
@@ -133,20 +134,20 @@ static void draw_current(GContext *ctx, GRect bounds) {
   if (s_cache.current[0] == UNAVAILABLE) snprintf(primary, sizeof(primary), "--");
   else snprintf(primary, sizeof(primary), "%u", s_cache.current[0]);
   draw_text(ctx, "AQI", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 54, 55, 24), GTextAlignmentCenter, GColorBlack);
+            GRect(8, 53, 55, 22), GTextAlignmentCenter, GColorBlack);
   draw_text(ctx, primary, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
-            GRect(4, 68, 96, 55), GTextAlignmentCenter, GColorBlack);
+            GRect(4, 60, 96, 50), GTextAlignmentCenter, GColorBlack);
   draw_text(ctx, category(s_cache.current[0]), fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(96, 69, bounds.size.w - 102, 52), GTextAlignmentCenter, GColorBlack);
+            GRect(96, 61, bounds.size.w - 102, 48), GTextAlignmentCenter, GColorBlack);
   graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(8, 121), GPoint(bounds.size.w - 8, 121));
+  graphics_draw_line(ctx, GPoint(8, 109), GPoint(bounds.size.w - 8, 109));
   for (int metric = 1; metric < METRICS; metric++) {
-    int y = 124 + (metric - 1) * 19;
-    draw_text(ctx, METRIC_NAMES[metric], fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-              GRect(9, y, 72, 20), GTextAlignmentLeft, GColorBlack);
+    int y = 110 + (metric - 1) * 23;
+    draw_text(ctx, METRIC_NAMES[metric], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+              GRect(8, y, 72, 28), GTextAlignmentLeft, GColorBlack);
     format_metric(value, sizeof(value), metric, s_cache.current[metric]);
-    draw_text(ctx, value, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-              GRect(76, y - 2, bounds.size.w - 85, 22), GTextAlignmentRight, GColorBlack);
+    draw_text(ctx, value, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+              GRect(74, y, bounds.size.w - 82, 28), GTextAlignmentRight, GColorBlack);
   }
   draw_footer(ctx, bounds);
 }
@@ -162,18 +163,28 @@ static uint16_t graph_maximum(int metric) {
   return (uint16_t)(((maximum + step - 1) / step) * step);
 }
 
+static int day_of_week(int year, int month, int day) {
+  static const int offsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  if (month < 3) year--;
+  return (year + year / 4 - year / 100 + year / 400 + offsets[month - 1] + day) % 7;
+}
+
+static void parse_date(uint32_t packed, int *year, int *month, int *day) {
+  *year = packed / 10000; *month = (packed / 100) % 100; *day = packed % 100;
+}
+
 static void draw_chart(GContext *ctx, GRect bounds) {
   int metric = s_page - 1;
   char title[24];
   char max_text[24];
   char stat[48];
-  snprintf(title, sizeof(title), "7-DAY %s", METRIC_NAMES[metric]);
+  snprintf(title, sizeof(title), "7-DAY %s", GRAPH_NAMES[metric]);
   draw_header(ctx, bounds, title);
   uint16_t maximum = graph_maximum(metric);
   format_metric(max_text, sizeof(max_text), metric, maximum);
-  draw_text(ctx, max_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 31, bounds.size.w - 16, 24), GTextAlignmentRight, GColorBlack);
-  const int left = 9, right = bounds.size.w - 9, top = 58, bottom = 165;
+  draw_text(ctx, max_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+            GRect(8, 30, bounds.size.w - 16, 28), GTextAlignmentRight, GColorBlack);
+  const int left = 9, right = bounds.size.w - 9, top = 58, bottom = 151;
   int slot = (right - left) / DAYS;
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
@@ -193,16 +204,19 @@ static void draw_chart(GContext *ctx, GRect bounds) {
       else graphics_draw_line(ctx, GPoint(center - 7, bottom - 1), GPoint(center + 7, bottom - 1));
       total += value; count++;
     }
-    char label[2] = {(char)('1' + column), '\0'};
+    int year = 0, month = 0, date = 0;
+    parse_date(s_cache.dates[day], &year, &month, &date);
+    const char *label = month >= 1 && month <= 12 && date >= 1 && date <= 31
+      ? WEEKDAYS[day_of_week(year, month, date)] : "?";
     draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
               GRect(center - 10, bottom + 1, 20, 22), GTextAlignmentCenter, GColorBlack);
   }
   if (count) {
     char avg[22]; format_metric(avg, sizeof(avg), metric, (uint16_t)(total / count));
-    snprintf(stat, sizeof(stat), "AVG %s  %d/7 DAYS", avg, count);
-  } else snprintf(stat, sizeof(stat), "NO HISTORY  0/7 DAYS");
-  draw_text(ctx, stat, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 187, bounds.size.w - 16, 25), GTextAlignmentCenter, GColorBlack);
+    snprintf(stat, sizeof(stat), "AVG %s", avg);
+  } else snprintf(stat, sizeof(stat), "NO HISTORY");
+  draw_text(ctx, stat, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+            GRect(8, 174, bounds.size.w - 16, 28), GTextAlignmentCenter, GColorBlack);
   draw_footer(ctx, bounds);
 }
 

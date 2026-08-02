@@ -25,6 +25,14 @@ test('phone-ready handshake retries launch delivery and outbox failures surface'
   assert.match(watch, /app_message_register_outbox_failed\(outbox_failed\)/);
 });
 
+test('typography follows CPAP large system-font hierarchy', () => {
+  assert.match(watch, /FONT_KEY_BITHAM_42_BOLD/);
+  assert.match(watch, /METRIC_NAMES\[metric\], fonts_get_system_font\(FONT_KEY_GOTHIC_24_BOLD\)/);
+  assert.match(watch, /title, fonts_get_system_font\(FONT_KEY_GOTHIC_28_BOLD\)/);
+  assert.match(watch, /body, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
+  assert.match(watch, /footer, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
+});
+
 test('secrets remain phone-only and production has no QA or loopback route', () => {
   assert.match(phone, /airquality\.settings\.v1/);
   assert.match(phone, /API key stays on your phone/);
