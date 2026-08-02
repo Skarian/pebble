@@ -3,47 +3,49 @@ package com.skarian.airquality
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
-import java.time.LocalDateTime
-import java.time.ZoneId
 
 class SnapshotAggregatorTest {
-    private val zone = ZoneId.of("America/Chicago")
+    @Test
+    fun preservesMinimumMaximumAndLastReadingAtScreenResolution() {
+        val readings = listOf(
+            reading(10, 600),
+            reading(20, 800),
+            reading(3_600, 700),
+        )
+        val snapshot = SnapshotAggregator.build(readings, "HOME", 3_600, ChartScale.HOUR)!!
+        assertEquals(GRAPH_COLUMNS, snapshot.columns.size)
+        assertEquals(600, snapshot.columns[0].metrics[0].minimum)
+        assertEquals(800, snapshot.columns[0].metrics[0].maximum)
+        assertEquals(800, snapshot.columns[0].metrics[0].last)
+        assertEquals(700, snapshot.averages[0])
+        assertNull(snapshot.columns[1].metrics[0].last)
+    }
 
     @Test
-    fun buildsSevenDailyBucketsAndAveragesSamples() {
-        val now = LocalDateTime.of(2026, 8, 2, 12, 0).atZone(zone).toEpochSecond()
+    fun usesExactRollingWindowsForAllScales() {
+        val now = 700_000L
         val readings = listOf(
-            reading(now - 60, 600),
-            reading(now - 120, 700),
-            reading(now - 86_400, 800),
+            reading(now - 8 * 24 * 60 * 60, 400),
+            reading(now - 2 * 24 * 60 * 60, 600),
+            reading(now - 30 * 60, 800),
+            reading(now, 1_000),
         )
-        val snapshot = SnapshotAggregator.build(
-            readings, "HOME", now, ChartScale.WEEK, zone,
-        )
-        requireNotNull(snapshot)
-        assertEquals(7, snapshot.points.size)
-        assertEquals(650, snapshot.points[0].co2Ppm)
-        assertEquals(800, snapshot.points[1].co2Ppm)
-        assertNull(snapshot.points[2].co2Ppm)
+        val hour = SnapshotAggregator.build(readings, "HOME", now, ChartScale.HOUR)!!
+        val day = SnapshotAggregator.build(readings, "HOME", now, ChartScale.DAY)!!
+        val week = SnapshotAggregator.build(readings, "HOME", now, ChartScale.WEEK)!!
+        assertEquals(900, hour.averages[0])
+        assertEquals(900, day.averages[0])
+        assertEquals(800, week.averages[0])
+        assertEquals(now - 3_600, hour.windowStartEpochSeconds)
+        assertEquals(now - 604_800, week.windowStartEpochSeconds)
     }
 
     @Test
     fun keepsTheNewestReadingAsCurrent() {
         val snapshot = SnapshotAggregator.build(
             listOf(reading(100, 500), reading(200, 900)), "OFFICE", 200,
-            zoneId = ZoneId.of("UTC"),
         )
         assertEquals(900, snapshot?.current?.co2Ppm)
-    }
-
-    @Test
-    fun hourAndDayUseShortAveragingBuckets() {
-        val readings = listOf(reading(3_599, 600), reading(3_100, 800), reading(2_500, 1000))
-        val hour = SnapshotAggregator.build(readings, "HOME", 3_599, ChartScale.HOUR, ZoneId.of("UTC"))!!
-        val day = SnapshotAggregator.build(readings, "HOME", 3_599, ChartScale.DAY, ZoneId.of("UTC"))!!
-        assertEquals(700, hour.points[0].co2Ppm)
-        assertEquals(1000, hour.points[1].co2Ppm)
-        assertEquals(800, day.points[0].co2Ppm)
     }
 
     private fun reading(time: Long, co2: Int) = AranetReading(

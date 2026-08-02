@@ -1,10 +1,11 @@
 #include <pebble.h>
 #include <limits.h>
 
-#define DAYS 7
 #define METRICS 4
+#define GRAPH_COLUMNS 56
+#define VALUES_PER_COLUMN 3
 #define PAGE_COUNT 5
-#define CACHE_VERSION 3
+#define CACHE_VERSION 4
 #define PERSIST_KEY_CACHE 4102
 #define UNAVAILABLE INT32_MIN
 #define RESPONSE_TIMEOUT_MS 30000
@@ -24,11 +25,13 @@ typedef struct {
   uint8_t co2_state;
   uint8_t battery;
   uint8_t scale;
+  uint8_t point_count;
   uint32_t observed_at;
+  uint32_t window_start;
   char location[32];
   int32_t current[METRICS];
-  uint32_t dates[DAYS];
-  int32_t history[METRICS][DAYS];
+  int32_t average[METRICS];
+  int16_t series[METRICS][GRAPH_COLUMNS][VALUES_PER_COLUMN];
 } AirCache;
 
 static Window *s_window;
@@ -47,8 +50,9 @@ static uint8_t s_request_command;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESS"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESS"};
-static const char *WEEKDAYS[] = {"S", "M", "T", "W", "T", "F", "S"};
 static const char *SCALE_NAMES[] = {"1 HOUR", "1 DAY", "1 WEEK"};
+static const char *AXIS_LEFT[] = {"1H AGO", "1D AGO", "7D AGO"};
+static const char *AXIS_MIDDLE[] = {"30 MIN", "12 HR", "3D AGO"};
 
 static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
                       GTextAlignment align, GColor color) {
@@ -203,39 +207,28 @@ static void draw_current(GContext *ctx, GRect bounds) {
 
 static void graph_range(int metric, int32_t *minimum, int32_t *maximum) {
   int32_t low = INT32_MAX, high = INT32_MIN;
-  for (int day = 0; day < DAYS; day++) {
-    int32_t value = s_cache.history[metric][day];
-    if (value == UNAVAILABLE) continue;
-    if (value < low) low = value;
-    if (value > high) high = value;
+  for (int column = 0; column < GRAPH_COLUMNS; column++) {
+    int16_t column_low = s_cache.series[metric][column][0];
+    int16_t column_high = s_cache.series[metric][column][1];
+    if (column_low == INT16_MIN || column_high == INT16_MIN) continue;
+    if (column_low < low) low = column_low;
+    if (column_high > high) high = column_high;
   }
   if (low == INT32_MAX) { *minimum = 0; *maximum = 1; return; }
-  if (metric == 0 && s_scale == SCALE_WEEK) {
-    *minimum = 0; *maximum = ((high + 499) / 500) * 500;
-  } else if (metric == 2 && s_scale == SCALE_WEEK) {
-    *minimum = 0; *maximum = ((high + 99) / 100) * 100;
-  } else {
-    int32_t step = metric == 0 ? 100 : 50;
-    *minimum = (low / step) * step;
-    *maximum = ((high + step - 1) / step) * step;
-  }
-  if (*maximum <= *minimum) *maximum = *minimum + (metric == 0 ? 500 : 50);
+  const int32_t steps[] = {100, 10, 20, 10};
+  int32_t step = steps[metric];
+  *minimum = low >= 0 ? (low / step) * step : -(((-low + step - 1) / step) * step);
+  *maximum = high >= 0 ? ((high + step - 1) / step) * step : -((-high / step) * step);
+  if (*maximum <= *minimum) { *minimum -= step; *maximum += step; }
 }
 
-static void format_point_label(char *buffer, size_t size, uint32_t timestamp) {
-  if (!timestamp) { snprintf(buffer, size, "?"); return; }
-  time_t value = (time_t)timestamp;
-  struct tm *local = localtime(&value);
-  if (!local) { snprintf(buffer, size, "?"); return; }
-  if (s_scale == SCALE_WEEK) {
-    snprintf(buffer, size, "%s", WEEKDAYS[local->tm_wday]);
-  } else if (s_scale == SCALE_DAY) {
-    int hour = local->tm_hour % 12;
-    snprintf(buffer, size, "%d%c", hour ? hour : 12,
-             local->tm_hour < 12 ? 'A' : 'P');
-  } else {
-    snprintf(buffer, size, "%02d", local->tm_min);
-  }
+static int graph_y(int32_t value, int32_t minimum, int32_t maximum,
+                   int top, int bottom) {
+  int height = (int)(((int64_t)(value - minimum) * (bottom - top)) /
+                     (maximum - minimum));
+  if (height < 0) height = 0;
+  if (height > bottom - top) height = bottom - top;
+  return bottom - height;
 }
 
 static void draw_chart(GContext *ctx, GRect bounds) {
@@ -264,46 +257,47 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   draw_text(ctx, range_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
             GRect(70, 30, bounds.size.w - 78, 28), GTextAlignmentRight, GColorBlack);
   const int left = 9, right = bounds.size.w - 9, top = 58, bottom = 151;
-  int slot = (right - left) / DAYS;
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_draw_line(ctx, GPoint(left, top), GPoint(right, top));
   graphics_draw_line(ctx, GPoint(left, bottom), GPoint(right, bottom));
-  int64_t total = 0; int count = 0;
+  int available = 0;
+  for (int column = 0; column < GRAPH_COLUMNS; column++)
+    if (s_cache.series[metric][column][2] != INT16_MIN) available++;
   GPoint previous = GPointZero;
   bool has_previous = false;
-  for (int column = 0; column < DAYS; column++) {
-    int day = DAYS - 1 - column;
-    int32_t value = s_cache.history[metric][day];
-    int center = left + column * slot + slot / 2;
-    if (value == UNAVAILABLE) {
-      graphics_draw_line(ctx, GPoint(center - 4, bottom - 5), GPoint(center + 4, bottom - 5));
-      has_previous = false;
-    } else {
-      int height = (int)(((int64_t)(value - minimum) * (bottom - top)) / (maximum - minimum));
-      if (height < 0) height = 0;
-      if (height > bottom - top) height = bottom - top;
-      int y = bottom - height;
-      if (s_scale == SCALE_WEEK) {
-        if (height) graphics_fill_rect(ctx, GRect(center - 7, y, 14, height), 0, GCornerNone);
-        else graphics_draw_line(ctx, GPoint(center - 7, bottom - 1), GPoint(center + 7, bottom - 1));
-      } else {
-        GPoint point = GPoint(center, y);
-        if (has_previous) graphics_draw_line(ctx, previous, point);
-        graphics_fill_circle(ctx, point, 3);
-        previous = point;
-        has_previous = true;
+  int previous_column = -GRAPH_COLUMNS;
+  int connect_gap = s_scale == SCALE_HOUR ? 6 : 2;
+  for (int column = 0; column < GRAPH_COLUMNS; column++) {
+    int16_t low = s_cache.series[metric][column][0];
+    int16_t high = s_cache.series[metric][column][1];
+    int16_t last = s_cache.series[metric][column][2];
+    int x = left + (column * (right - left)) / (GRAPH_COLUMNS - 1);
+    if (last != INT16_MIN) {
+      int low_y = graph_y(low, minimum, maximum, top, bottom);
+      int high_y = graph_y(high, minimum, maximum, top, bottom);
+      int last_y = graph_y(last, minimum, maximum, top, bottom);
+      if (low != high) {
+        graphics_draw_line(ctx, GPoint(x, high_y), GPoint(x, low_y));
       }
-      total += value; count++;
+      GPoint point = GPoint(x, last_y);
+      if (has_previous && column - previous_column <= connect_gap)
+        graphics_draw_line(ctx, previous, point);
+      if (available <= 20) graphics_fill_circle(ctx, point, 2);
+      previous = point;
+      has_previous = true;
+      previous_column = column;
     }
-    char label[6];
-    format_point_label(label, sizeof(label), s_cache.dates[day]);
-    draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-              GRect(center - slot / 2, bottom + 1, slot, 22),
-              GTextAlignmentCenter, GColorBlack);
   }
-  if (count) {
-    char avg[24]; format_metric(avg, sizeof(avg), metric, (int32_t)(total / count));
+  draw_text(ctx, AXIS_LEFT[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(left, bottom + 1, 68, 22), GTextAlignmentLeft, GColorBlack);
+  draw_text(ctx, AXIS_MIDDLE[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(bounds.size.w / 2 - 34, bottom + 1, 68, 22),
+            GTextAlignmentCenter, GColorBlack);
+  draw_text(ctx, "NOW", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(right - 45, bottom + 1, 45, 22), GTextAlignmentRight, GColorBlack);
+  if (s_cache.average[metric] != UNAVAILABLE) {
+    char avg[24]; format_metric(avg, sizeof(avg), metric, s_cache.average[metric]);
     snprintf(stat, sizeof(stat), "AVG %s", avg);
   } else snprintf(stat, sizeof(stat), "NO HISTORY");
   draw_text(ctx, stat, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
@@ -409,26 +403,38 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     if (next.scale >= SCALE_COUNT) next.scale = SCALE_HOUR;
     s_scale = next.scale;
     next.observed_at = observed->value->uint32;
+    next.window_start = (uint32_t)tuple_i32(iter, MESSAGE_KEY_WINDOW_START, 0);
+    next.point_count = (uint8_t)tuple_i32(iter, MESSAGE_KEY_POINT_COUNT, 0);
     snprintf(next.location, sizeof(next.location), "%s", location->value->cstring);
     const uint32_t current_keys[] = {MESSAGE_KEY_CO2, MESSAGE_KEY_TEMP_X10,
       MESSAGE_KEY_HUMIDITY_X10, MESSAGE_KEY_PRESSURE_X10};
-    const uint32_t date_keys[] = {MESSAGE_KEY_DAY0_DATE, MESSAGE_KEY_DAY1_DATE,
-      MESSAGE_KEY_DAY2_DATE, MESSAGE_KEY_DAY3_DATE, MESSAGE_KEY_DAY4_DATE,
-      MESSAGE_KEY_DAY5_DATE, MESSAGE_KEY_DAY6_DATE};
-    const uint32_t history_keys[METRICS][DAYS] = {
-      {MESSAGE_KEY_DAY0_CO2,MESSAGE_KEY_DAY1_CO2,MESSAGE_KEY_DAY2_CO2,MESSAGE_KEY_DAY3_CO2,MESSAGE_KEY_DAY4_CO2,MESSAGE_KEY_DAY5_CO2,MESSAGE_KEY_DAY6_CO2},
-      {MESSAGE_KEY_DAY0_TEMP_X10,MESSAGE_KEY_DAY1_TEMP_X10,MESSAGE_KEY_DAY2_TEMP_X10,MESSAGE_KEY_DAY3_TEMP_X10,MESSAGE_KEY_DAY4_TEMP_X10,MESSAGE_KEY_DAY5_TEMP_X10,MESSAGE_KEY_DAY6_TEMP_X10},
-      {MESSAGE_KEY_DAY0_HUMIDITY_X10,MESSAGE_KEY_DAY1_HUMIDITY_X10,MESSAGE_KEY_DAY2_HUMIDITY_X10,MESSAGE_KEY_DAY3_HUMIDITY_X10,MESSAGE_KEY_DAY4_HUMIDITY_X10,MESSAGE_KEY_DAY5_HUMIDITY_X10,MESSAGE_KEY_DAY6_HUMIDITY_X10},
-      {MESSAGE_KEY_DAY0_PRESSURE_X10,MESSAGE_KEY_DAY1_PRESSURE_X10,MESSAGE_KEY_DAY2_PRESSURE_X10,MESSAGE_KEY_DAY3_PRESSURE_X10,MESSAGE_KEY_DAY4_PRESSURE_X10,MESSAGE_KEY_DAY5_PRESSURE_X10,MESSAGE_KEY_DAY6_PRESSURE_X10}
-    };
+    const uint32_t series_keys[] = {MESSAGE_KEY_SERIES_CO2,
+      MESSAGE_KEY_SERIES_TEMP_X10, MESSAGE_KEY_SERIES_HUMIDITY_X10,
+      MESSAGE_KEY_SERIES_PRESSURE_X10};
+    const uint32_t average_keys[] = {MESSAGE_KEY_AVG_CO2,
+      MESSAGE_KEY_AVG_TEMP_X10, MESSAGE_KEY_AVG_HUMIDITY_X10,
+      MESSAGE_KEY_AVG_PRESSURE_X10};
+    bool chart_valid = next.point_count == GRAPH_COLUMNS;
     for (int metric = 0; metric < METRICS; metric++) {
       next.current[metric] = tuple_i32(iter, current_keys[metric], UNAVAILABLE);
-      for (int day = 0; day < DAYS; day++)
-        next.history[metric][day] = tuple_i32(iter, history_keys[metric][day], UNAVAILABLE);
+      next.average[metric] = tuple_i32(iter, average_keys[metric], UNAVAILABLE);
+      Tuple *series = dict_find(iter, series_keys[metric]);
+      if (!series || series->length < GRAPH_COLUMNS * VALUES_PER_COLUMN * 2) {
+        chart_valid = false;
+        continue;
+      }
+      const uint8_t *bytes = series->value->data;
+      for (int column = 0; column < GRAPH_COLUMNS; column++) {
+        for (int value = 0; value < VALUES_PER_COLUMN; value++) {
+          int offset = (column * VALUES_PER_COLUMN + value) * 2;
+          uint16_t raw = (uint16_t)bytes[offset] | ((uint16_t)bytes[offset + 1] << 8);
+          next.series[metric][column][value] = (int16_t)raw;
+        }
+      }
     }
-    for (int day = 0; day < DAYS; day++) {
-      Tuple *date = dict_find(iter, date_keys[day]);
-      next.dates[day] = date ? date->value->uint32 : 0;
+    if (!chart_valid) {
+      if (scale_response) { s_status = STATUS_OK; return; }
+      s_status = STATUS_SERVICE; layer_mark_dirty(s_canvas); return;
     }
     s_cache = next; s_has_cache = true;
     persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));

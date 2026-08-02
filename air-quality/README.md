@@ -60,9 +60,15 @@ If the sensor appears without a reading, open Aranet Home and enable
 ## How history works
 
 After you choose a sensor, the companion imports up to eight days of readings
-already stored in the Aranet4. It then saves each new reading it sees. One-hour
-and one-day views use a line through averaged time buckets; the one-week view
-uses daily average bars. The database retains eight days.
+already stored in the Aranet4. It then saves each new reading it sees. The
+database retains eight days.
+
+All three chart scales use the same rolling time-series view. The graph has 56
+time columns, which is the useful horizontal resolution at Pebble size. Every
+stored reading in the selected hour, day, or week contributes to its column.
+The thin vertical mark preserves that column's real minimum and maximum, while
+the line connects its last actual reading. Spikes are not averaged away. The
+average below the chart is calculated from all readings in the window.
 
 The first import can take a few seconds. If the sensor does not offer saved
 history, new readings still build the charts normally. Tap **Refresh now** in
@@ -131,7 +137,7 @@ Useful primary references:
 
 - Watchapp UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
 - Android package: `com.skarian.airquality`
-- Watch cache: key `4102`, version `3`
+- Watch cache: key `4102`, version `4`
 - Android database: `airquality-readings.db`
 - Notification ID/channel: `4102` / `airquality-monitor`
 - QA scratch: `/private/tmp/airquality-qa-*`

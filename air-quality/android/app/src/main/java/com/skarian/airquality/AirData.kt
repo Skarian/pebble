@@ -1,9 +1,8 @@
 package com.skarian.airquality
 
-import java.time.Instant
-import java.time.ZoneId
-
 const val UNAVAILABLE: Int = Int.MIN_VALUE
+const val GRAPH_COLUMNS: Int = 56
+const val METRIC_COUNT: Int = 4
 
 data class AranetReading(
     val address: String,
@@ -17,29 +16,31 @@ data class AranetReading(
     val co2State: Int,
 )
 
-enum class ChartScale(val wireValue: Int, val bucketSeconds: Long) {
-    HOUR(0, 10 * 60),
-    DAY(1, 4 * 60 * 60),
-    WEEK(2, 24 * 60 * 60);
+enum class ChartScale(val wireValue: Int, val windowSeconds: Long) {
+    HOUR(0, 60 * 60),
+    DAY(1, 24 * 60 * 60),
+    WEEK(2, 7 * 24 * 60 * 60);
 
     companion object {
         fun fromWire(value: Int?): ChartScale = entries.firstOrNull { it.wireValue == value } ?: HOUR
     }
 }
 
-data class BucketReading(
-    val startsAtEpochSeconds: Int,
-    val co2Ppm: Int?,
-    val temperatureX10: Int?,
-    val humidityX10: Int?,
-    val pressureX10: Int?,
+data class MetricBand(
+    val minimum: Int?,
+    val maximum: Int?,
+    val last: Int?,
 )
+
+data class ChartColumn(val metrics: List<MetricBand>)
 
 data class AirSnapshot(
     val location: String,
     val current: AranetReading,
     val scale: ChartScale,
-    val points: List<BucketReading>,
+    val windowStartEpochSeconds: Long,
+    val columns: List<ChartColumn>,
+    val averages: List<Int?>,
 )
 
 object SnapshotAggregator {
@@ -48,35 +49,60 @@ object SnapshotAggregator {
         location: String,
         nowEpochSeconds: Long,
         scale: ChartScale = ChartScale.HOUR,
-        zoneId: ZoneId = ZoneId.systemDefault(),
     ): AirSnapshot? {
         val current = readings.maxByOrNull { it.observedAtEpochSeconds } ?: return null
-        val starts = if (scale == ChartScale.WEEK) {
-            val today = Instant.ofEpochSecond(nowEpochSeconds).atZone(zoneId).toLocalDate()
-            (0L..6L).map { today.minusDays(it).atStartOfDay(zoneId).toEpochSecond() }
-        } else {
-            val aligned = nowEpochSeconds - nowEpochSeconds % scale.bucketSeconds
-            (0L..6L).map { aligned - it * scale.bucketSeconds }
+        val windowStart = nowEpochSeconds - scale.windowSeconds
+        val inWindow = readings.asSequence()
+            .filter { it.observedAtEpochSeconds in windowStart..nowEpochSeconds }
+            .sortedBy { it.observedAtEpochSeconds }
+            .toList()
+        val minimums = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
+        val maximums = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
+        val lasts = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
+        val totals = LongArray(METRIC_COUNT)
+        val counts = IntArray(METRIC_COUNT)
+
+        inWindow.forEach { reading ->
+            val elapsed = reading.observedAtEpochSeconds - windowStart
+            val column = ((elapsed * GRAPH_COLUMNS) / scale.windowSeconds)
+                .toInt().coerceIn(0, GRAPH_COLUMNS - 1)
+            repeat(METRIC_COUNT) { metric ->
+                val value = metricValue(reading, metric)
+                if (value == UNAVAILABLE) return@repeat
+                minimums[metric][column] = minimums[metric][column]?.let { minOf(it, value) } ?: value
+                maximums[metric][column] = maximums[metric][column]?.let { maxOf(it, value) } ?: value
+                lasts[metric][column] = value
+                totals[metric] += value
+                counts[metric] += 1
+            }
         }
-        val points = starts.map { start ->
-            val end = if (scale == ChartScale.WEEK) {
-                Instant.ofEpochSecond(start).atZone(zoneId).toLocalDate().plusDays(1)
-                    .atStartOfDay(zoneId).toEpochSecond()
-            } else start + scale.bucketSeconds
-            val values = readings.filter { it.observedAtEpochSeconds in start until end }
-            BucketReading(
-                startsAtEpochSeconds = start.toInt(),
-                co2Ppm = values.averageInt { it.co2Ppm },
-                temperatureX10 = values.averageInt { it.temperatureX10 },
-                humidityX10 = values.averageInt { it.humidityX10 },
-                pressureX10 = values.averageInt { it.pressureX10 },
-            )
+
+        val columns = (0 until GRAPH_COLUMNS).map { column ->
+            ChartColumn((0 until METRIC_COUNT).map { metric ->
+                MetricBand(
+                    minimum = minimums[metric][column],
+                    maximum = maximums[metric][column],
+                    last = lasts[metric][column],
+                )
+            })
         }
-        return AirSnapshot(location.trim().ifEmpty { "ARANET4" }.take(31), current, scale, points)
+        val averages = (0 until METRIC_COUNT).map { metric ->
+            if (counts[metric] == 0) null else (totals[metric] / counts[metric]).toInt()
+        }
+        return AirSnapshot(
+            location = location.trim().ifEmpty { "ARANET4" }.take(31),
+            current = current,
+            scale = scale,
+            windowStartEpochSeconds = windowStart,
+            columns = columns,
+            averages = averages,
+        )
     }
 
-    private fun List<AranetReading>.averageInt(value: (AranetReading) -> Int): Int? {
-        if (isEmpty()) return null
-        return (sumOf { value(it).toLong() } / size).toInt()
+    private fun metricValue(reading: AranetReading, metric: Int): Int = when (metric) {
+        0 -> reading.co2Ppm
+        1 -> reading.temperatureX10
+        2 -> reading.humidityX10
+        else -> reading.pressureX10
     }
 }

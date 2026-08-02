@@ -11,7 +11,7 @@ const protocol = readFileSync(new URL('../android/app/src/main/java/com/skarian/
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
 
 test('watch keeps a new versioned last-good cache and rejects stale responses', () => {
-  assert.match(watch, /CACHE_VERSION 3/);
+  assert.match(watch, /CACHE_VERSION 4/);
   assert.match(watch, /PERSIST_KEY_CACHE 4102/);
   assert.match(watch, /!request \|\| request->value->uint16 != s_request_id/);
   assert.match(watch, /observed->value->uint32 < s_cache\.observed_at/);
@@ -25,7 +25,8 @@ test('navigation is one bounded current page plus four charts', () => {
   assert.match(watch, /s_page \+ 1 < PAGE_COUNT/);
   assert.deepEqual(packageJson.pebble.messageKeys.CO2, 10);
   assert.deepEqual(packageJson.pebble.messageKeys.SCALE, 14);
-  assert.deepEqual(packageJson.pebble.messageKeys.DAY6_PRESSURE_X10, 54);
+  assert.deepEqual(packageJson.pebble.messageKeys.SERIES_CO2, 60);
+  assert.deepEqual(packageJson.pebble.messageKeys.AVG_PRESSURE_X10, 67);
 });
 
 test('production routes through Android companion and bundles no PebbleKit JS', () => {
@@ -62,7 +63,12 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
   assert.match(companion, /if \(refreshSensor\)/);
   assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
-  assert.match(watch, /if \(s_scale == SCALE_WEEK\)/);
+  assert.match(watch, /AXIS_LEFT\[\] = \{"1H AGO", "1D AGO", "7D AGO"\}/);
+  assert.match(watch, /AXIS_MIDDLE\[\] = \{"30 MIN", "12 HR", "3D AGO"\}/);
+  assert.doesNotMatch(watch, /if \(s_scale == SCALE_WEEK\)/);
+  assert.match(watch, /GRAPH_COLUMNS 56/);
+  assert.match(watch, /column_low = s_cache\.series/);
+  assert.match(watch, /connect_gap = s_scale == SCALE_HOUR \? 6 : 2/);
   assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);
 });
 

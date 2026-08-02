@@ -1,9 +1,11 @@
 'use strict';
 
-// External QA uses this model to produce the same typed AppMessage contract as
-// the Android companion. It is not bundled in the production PBW.
-var DAYS = 7;
+// External QA produces the same packed chart contract as the Android companion.
+// This file is not bundled in the production PBW.
+var GRAPH_COLUMNS = 56;
+var VALUES_PER_COLUMN = 3;
 var UNAVAILABLE = -2147483648;
+var PACKED_UNAVAILABLE = -32768;
 var METRICS = ['co2', 'temperature', 'humidity', 'pressure'];
 
 function finite(value) {
@@ -30,25 +32,47 @@ function normalize(reading) {
   };
 }
 
-function sevenBuckets(points, now, scale) {
-  var widths = [600000, 14400000, 86400000];
-  var width = widths[scale] || widths[0];
-  var start = Math.floor(now.getTime() / width) * width;
-  if (scale === 2) start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  var result = [];
-  for (var i = 0; i < DAYS; i += 1) {
-    result.push({time: Math.floor((start - i * width) / 1000),
-      values: normalize((points || [])[i])});
-  }
-  return result;
+function normalizeBand(point, name) {
+  var normalized = normalize(point);
+  var value = normalized[name];
+  if (value === UNAVAILABLE) return [PACKED_UNAVAILABLE, PACKED_UNAVAILABLE, PACKED_UNAVAILABLE];
+  var lowInput = point && point[name + 'Min'];
+  var highInput = point && point[name + 'Max'];
+  var low = finite(lowInput) ? normalize(Object.assign({}, point, {[name]: lowInput}))[name] : value;
+  var high = finite(highInput) ? normalize(Object.assign({}, point, {[name]: highInput}))[name] : value;
+  return [Math.min(low, value), Math.max(high, value), value];
 }
 
-function isPartial(current, days) {
+function chartColumns(points) {
+  var input = points || [];
+  return Array.from({length: GRAPH_COLUMNS}, function (_, index) {
+    var point = input[index];
+    return METRICS.map(function (name) { return normalizeBand(point, name); });
+  });
+}
+
+function average(columns, metric) {
+  var values = columns.map(function (column) { return column[metric][2]; })
+    .filter(function (value) { return value !== PACKED_UNAVAILABLE; });
+  if (!values.length) return UNAVAILABLE;
+  return Math.round(values.reduce(function (total, value) { return total + value; }, 0) / values.length);
+}
+
+function packSeries(columns, metric) {
+  var bytes = [];
+  columns.forEach(function (column) {
+    column[metric].forEach(function (value) {
+      var packed = value >= -32767 && value <= 32767 ? value : PACKED_UNAVAILABLE;
+      bytes.push(packed & 255, (packed >> 8) & 255);
+    });
+  });
+  return bytes;
+}
+
+function isPartial(current, columns) {
   var values = normalize(current);
   if (METRICS.some(function (name) { return values[name] === UNAVAILABLE; })) return true;
-  return days.some(function (day) {
-    return METRICS.some(function (name) { return day.values[name] === UNAVAILABLE; });
-  });
+  return METRICS.some(function (_, metric) { return average(columns, metric) === UNAVAILABLE; });
 }
 
 function co2State(value, supplied) {
@@ -62,10 +86,11 @@ function dictionary(snapshot, observedAt, requestId, requestedScale) {
   var scale = finite(requestedScale) ? Number(requestedScale) : Number(snapshot.scale || 0);
   if (scale < 0 || scale > 2) scale = 0;
   var current = normalize(snapshot.current);
-  var days = sevenBuckets(snapshot.points, new Date(observedAt), scale);
+  var columns = chartColumns(snapshot.points);
+  var windows = [3600, 86400, 604800];
   var result = {
     PROTOCOL: 1,
-    STATUS: isPartial(snapshot.current, days) ? 8 : 0,
+    STATUS: isPartial(snapshot.current, columns) ? 8 : 0,
     OBSERVED_AT: Math.floor(observedAt / 1000),
     FLAGS: snapshot.stale ? 1 : 0,
     LOCATION: String(snapshot.location || 'ARANET4').slice(0, 31),
@@ -75,20 +100,24 @@ function dictionary(snapshot, observedAt, requestId, requestedScale) {
     CO2: current.co2,
     TEMP_X10: current.temperature,
     HUMIDITY_X10: current.humidity,
-    PRESSURE_X10: current.pressure
+    PRESSURE_X10: current.pressure,
+    SCALE: scale,
+    POINT_COUNT: GRAPH_COLUMNS,
+    WINDOW_START: Math.floor(observedAt / 1000) - windows[scale],
+    SERIES_CO2: packSeries(columns, 0),
+    SERIES_TEMP_X10: packSeries(columns, 1),
+    SERIES_HUMIDITY_X10: packSeries(columns, 2),
+    SERIES_PRESSURE_X10: packSeries(columns, 3),
+    AVG_CO2: average(columns, 0),
+    AVG_TEMP_X10: average(columns, 1),
+    AVG_HUMIDITY_X10: average(columns, 2),
+    AVG_PRESSURE_X10: average(columns, 3)
   };
-  result.SCALE = scale;
   if (requestId) result.REQUEST_ID = requestId;
-  var suffixes = {co2: 'CO2', temperature: 'TEMP_X10', humidity: 'HUMIDITY_X10', pressure: 'PRESSURE_X10'};
-  days.forEach(function (day, index) {
-    result['DAY' + index + '_DATE'] = day.time;
-    METRICS.forEach(function (name) {
-      result['DAY' + index + '_' + suffixes[name]] = day.values[name];
-    });
-  });
   return result;
 }
 
-module.exports = {DAYS: DAYS, UNAVAILABLE: UNAVAILABLE, METRICS: METRICS,
-  normalize: normalize, sevenBuckets: sevenBuckets, isPartial: isPartial,
-  co2State: co2State, dictionary: dictionary};
+module.exports = {GRAPH_COLUMNS: GRAPH_COLUMNS, VALUES_PER_COLUMN: VALUES_PER_COLUMN,
+  UNAVAILABLE: UNAVAILABLE, PACKED_UNAVAILABLE: PACKED_UNAVAILABLE, METRICS: METRICS,
+  normalize: normalize, chartColumns: chartColumns, packSeries: packSeries,
+  isPartial: isPartial, co2State: co2State, dictionary: dictionary};

@@ -21,6 +21,16 @@ object PebbleProtocol {
     const val HUMIDITY_X10 = 12
     const val PRESSURE_X10 = 13
     const val SCALE = 14
+    const val POINT_COUNT = 15
+    const val WINDOW_START = 16
+    const val SERIES_CO2 = 60
+    const val SERIES_TEMP_X10 = 61
+    const val SERIES_HUMIDITY_X10 = 62
+    const val SERIES_PRESSURE_X10 = 63
+    const val AVG_CO2 = 64
+    const val AVG_TEMP_X10 = 65
+    const val AVG_HUMIDITY_X10 = 66
+    const val AVG_PRESSURE_X10 = 67
 
     const val COMMAND_FETCH = 1
     const val COMMAND_PHONE_READY = 2
@@ -52,10 +62,7 @@ object PebbleProtocol {
     }
 
     fun snapshot(snapshot: AirSnapshot, requestId: Int, nowEpochSeconds: Long): PebbleDictionary {
-        val partial = snapshot.points.any {
-            it.co2Ppm == null || it.temperatureX10 == null ||
-                it.humidityX10 == null || it.pressureX10 == null
-        }
+        val partial = snapshot.averages.any { it == null }
         val stale = nowEpochSeconds - snapshot.current.observedAtEpochSeconds > 30 * 60
         val result = mutableMapOf<UInt, PebbleDictionaryItem>(
             PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(1),
@@ -71,17 +78,38 @@ object PebbleProtocol {
             HUMIDITY_X10.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.humidityX10),
             PRESSURE_X10.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.pressureX10),
             SCALE.toUInt() to PebbleDictionaryItem.UInt8(snapshot.scale.wireValue),
+            POINT_COUNT.toUInt() to PebbleDictionaryItem.UInt8(GRAPH_COLUMNS),
+            WINDOW_START.toUInt() to PebbleDictionaryItem.UInt32(snapshot.windowStartEpochSeconds),
         )
-        snapshot.points.take(7).forEachIndexed { index, point ->
-            val base = 20 + index * 5
-            result[base.toUInt()] = PebbleDictionaryItem.UInt32(point.startsAtEpochSeconds.toLong())
-            result[(base + 1).toUInt()] = PebbleDictionaryItem.Int32(point.co2Ppm ?: UNAVAILABLE)
-            result[(base + 2).toUInt()] = PebbleDictionaryItem.Int32(point.temperatureX10 ?: UNAVAILABLE)
-            result[(base + 3).toUInt()] = PebbleDictionaryItem.Int32(point.humidityX10 ?: UNAVAILABLE)
-            result[(base + 4).toUInt()] = PebbleDictionaryItem.Int32(point.pressureX10 ?: UNAVAILABLE)
+        val seriesKeys = intArrayOf(SERIES_CO2, SERIES_TEMP_X10, SERIES_HUMIDITY_X10, SERIES_PRESSURE_X10)
+        val averageKeys = intArrayOf(AVG_CO2, AVG_TEMP_X10, AVG_HUMIDITY_X10, AVG_PRESSURE_X10)
+        repeat(METRIC_COUNT) { metric ->
+            result[seriesKeys[metric].toUInt()] = PebbleDictionaryItem.Bytes(packSeries(snapshot, metric))
+            result[averageKeys[metric].toUInt()] = PebbleDictionaryItem.Int32(
+                snapshot.averages[metric] ?: UNAVAILABLE,
+            )
         }
         return result
     }
+
+    private fun packSeries(snapshot: AirSnapshot, metric: Int): ByteArray =
+        ByteArray(GRAPH_COLUMNS * VALUES_PER_COLUMN * 2).also { bytes ->
+            snapshot.columns.forEachIndexed { column, chartColumn ->
+                val band = chartColumn.metrics[metric]
+                val values = intArrayOf(
+                    band.minimum ?: PACKED_UNAVAILABLE,
+                    band.maximum ?: PACKED_UNAVAILABLE,
+                    band.last ?: PACKED_UNAVAILABLE,
+                )
+                values.forEachIndexed { valueIndex, value ->
+                    val offset = (column * VALUES_PER_COLUMN + valueIndex) * 2
+                    val packed = value.takeIf { it in Short.MIN_VALUE + 1..Short.MAX_VALUE }
+                        ?: PACKED_UNAVAILABLE
+                    bytes[offset] = (packed and 0xff).toByte()
+                    bytes[offset + 1] = (packed shr 8).toByte()
+                }
+            }
+        }
 
     fun number(data: PebbleDictionary, key: Int): Int? = when (val item = data[key.toUInt()]) {
         is PebbleDictionaryItem.Int32 -> item.value
@@ -92,4 +120,7 @@ object PebbleProtocol {
         is PebbleDictionaryItem.UInt8 -> item.value.toInt()
         else -> null
     }
+
+    private const val VALUES_PER_COLUMN = 3
+    private const val PACKED_UNAVAILABLE = Short.MIN_VALUE.toInt()
 }

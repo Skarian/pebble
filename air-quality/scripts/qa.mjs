@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = resolve(ROOT, '..');
 const LOCK = '/private/tmp/pebble-emulator-qa.lock';
-const CAPTURE = resolve(REPO, 'pebble-screenshot-tool/capture.py');
+const CAPTURE = resolve(ROOT, 'scripts/qa-capture.py');
 const PBW = resolve(ROOT, 'build/air-quality.pbw');
 const require = createRequire(import.meta.url);
 const Model = require('../src/common/air_quality_model');
@@ -115,9 +115,10 @@ function encode(dictionary) {
     if (MESSAGE_KEYS[name] === undefined) continue;
     let type = 'int32';
     if (name === 'LOCATION' || name === 'ERROR_TEXT') type = 'cstring';
-    else if (name === 'OBSERVED_AT' || name.endsWith('_DATE')) type = 'uint32';
+    else if (name.startsWith('SERIES_')) type = 'bytes';
+    else if (name === 'OBSERVED_AT' || name === 'WINDOW_START') type = 'uint32';
     else if (name === 'REQUEST_ID') type = 'uint16';
-    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS', 'CO2_STATE', 'SCALE'].includes(name)) type = 'uint8';
+    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS', 'CO2_STATE', 'SCALE', 'POINT_COUNT'].includes(name)) type = 'uint8';
     encoded[MESSAGE_KEYS[name]] = {type, value};
   }
   return encoded;
@@ -136,17 +137,31 @@ function snapshot(co2, options = {}) {
     pressure: options.pressure ?? 1008.6,
     battery: options.battery ?? 87,
   };
-  const points = Array.from({length: 7}, (_, index) => ({
-    co2: Math.max(420, co2 - index * 35),
-    temperature: base.temperature - index * 0.2,
-    humidity: base.humidity + index * 0.4,
-    pressure: base.pressure + index * 0.6,
-  }));
+  const points = Array.from({length: Model.GRAPH_COLUMNS}, (_, index) => {
+    const wave = Math.sin(index / 5.5);
+    const spike = index === 18 || index === 41 ? 105 : 0;
+    return {
+      co2: Math.max(420, Math.round(co2 - 45 + wave * 70 + spike)),
+      co2Min: Math.max(400, Math.round(co2 - 60 + wave * 70)),
+      co2Max: Math.round(co2 - 30 + wave * 70 + spike),
+      temperature: base.temperature - 0.7 + wave * 0.8,
+      temperatureMin: base.temperature - 0.9 + wave * 0.8,
+      temperatureMax: base.temperature - 0.5 + wave * 0.8,
+      humidity: base.humidity + 1.4 - wave * 2.1,
+      humidityMin: base.humidity + 0.8 - wave * 2.1,
+      humidityMax: base.humidity + 2.0 - wave * 2.1,
+      pressure: base.pressure + wave * 2.3,
+      pressureMin: base.pressure - 0.4 + wave * 2.3,
+      pressureMax: base.pressure + 0.4 + wave * 2.3,
+    };
+  });
   if (options.missingMetric) {
     delete base.pressure;
-    points.forEach((row) => delete row.pressure);
+    points.forEach((row) => {
+      delete row.pressure; delete row.pressureMin; delete row.pressureMax;
+    });
   }
-  if (options.missingHistory) points.splice(0, 7);
+  if (options.missingHistory) points.splice(0, points.length);
   return {location: 'HOME', current: base, points, scale: options.scale || 0,
     stale: Boolean(options.stale)};
 }
