@@ -6,6 +6,8 @@ const watch = readFileSync(new URL('../src/c/main.c', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const wscript = readFileSync(new URL('../wscript', import.meta.url), 'utf8');
 const companion = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/AirQualityPebbleService.kt', import.meta.url), 'utf8');
+const history = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/AranetHistoryReader.kt', import.meta.url), 'utf8');
+const store = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/ReadingStore.kt', import.meta.url), 'utf8');
 const scanner = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/AranetScanner.kt', import.meta.url), 'utf8');
 const protocol = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/PebbleProtocol.kt', import.meta.url), 'utf8');
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
@@ -22,7 +24,7 @@ test('app packages a dedicated one-bit menu icon', () => {
 });
 
 test('watch keeps a new versioned last-good cache and rejects stale responses', () => {
-  assert.match(watch, /CACHE_VERSION 5/);
+  assert.match(watch, /CACHE_VERSION 6/);
   assert.match(watch, /PROTOCOL_VERSION 2/);
   assert.match(watch, /PERSIST_KEY_CACHE 4102/);
   assert.match(watch, /!request \|\| request->value->uint16 != s_request_id/);
@@ -51,6 +53,16 @@ test('production routes through Android companion and bundles no PebbleKit JS', 
   assert.match(companion, /DefaultPebbleSender/);
 });
 
+test('chart refreshes repair missing history from the Aranet device', () => {
+  assert.match(companion, /backfillHistoryIfNeeded\(address, settings\.watchName, scale\)/);
+  assert.match(companion, /historyMutex\.withLock/);
+  assert.match(companion, /lookbackSeconds = lookbackSeconds/);
+  assert.match(companion, /ReadingStore\(this\)\.use \{ it\.saveAll\(readings\) \}/);
+  assert.match(history, /historySampleCount/);
+  assert.match(history, /requestedStart = totalReadings - sampleCount \+ 1/);
+  assert.match(store, /requiredHistoryLookbackSeconds/);
+});
+
 test('Aranet4 metrics and services replace all cloud AQI assumptions', () => {
   assert.match(scanner, /MANUFACTURER_ID/);
   assert.match(protocol, /PRESSURE_X10 = 13/);
@@ -71,6 +83,10 @@ test('typography and plain headers keep the CPAP hierarchy', () => {
 });
 
 test('current refresh blocks while chart scale changes stay nonblocking', () => {
+  assert.match(watch, /#define DEFAULT_SCALE SCALE_DAY/);
+  assert.match(watch, /static uint8_t s_scale = DEFAULT_SCALE/);
+  assert.match(watch, /static uint8_t s_pending_scale = DEFAULT_SCALE/);
+  assert.match(watch, /s_cache\.scale < SCALE_COUNT \? s_cache\.scale : DEFAULT_SCALE/);
   assert.match(watch, /if \(s_loading\) draw_state/);
   assert.match(watch, /s_pending_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
   assert.match(watch, /request_data\(COMMAND_SCALE\)/);

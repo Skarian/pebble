@@ -5,6 +5,7 @@ import kotlin.math.roundToInt
 const val UNAVAILABLE: Int = Int.MIN_VALUE
 const val GRAPH_COLUMNS: Int = 56
 const val METRIC_COUNT: Int = 4
+const val MAX_HISTORY_GAP_SECONDS: Long = 15 * 60
 
 data class AranetReading(
     val address: String,
@@ -26,6 +27,31 @@ enum class ChartScale(val wireValue: Int, val windowSeconds: Long) {
     companion object {
         fun fromWire(value: Int?): ChartScale = entries.firstOrNull { it.wireValue == value } ?: HOUR
     }
+}
+
+fun requiredHistoryLookbackSeconds(
+    timestamps: List<Long>,
+    nowEpochSeconds: Long,
+    windowSeconds: Long,
+    maximumGapSeconds: Long = MAX_HISTORY_GAP_SECONDS,
+): Long? {
+    val windowStart = nowEpochSeconds - windowSeconds
+    val ordered = timestamps.asSequence()
+        .filter { it in windowStart..nowEpochSeconds }
+        .distinct()
+        .sorted()
+        .toList()
+    if (ordered.isEmpty()) return windowSeconds
+    var previous = windowStart
+    ordered.forEach { timestamp ->
+        if (timestamp - previous > maximumGapSeconds) {
+            return nowEpochSeconds - previous
+        }
+        previous = timestamp
+    }
+    return if (nowEpochSeconds - previous > maximumGapSeconds) {
+        nowEpochSeconds - previous
+    } else null
 }
 
 data class ChartColumn(val metrics: List<Int?>)

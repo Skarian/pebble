@@ -84,6 +84,26 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
         return result
     }
 
+    @Synchronized
+    fun requiredHistoryLookbackSeconds(
+        address: String,
+        nowEpochSeconds: Long,
+        windowSeconds: Long,
+    ): Long? {
+        val timestamps = mutableListOf<Long>()
+        val cursor = readableDatabase.query(
+            "readings", arrayOf("observed_at"), "address = ? AND observed_at >= ?",
+            arrayOf(address, (nowEpochSeconds - windowSeconds).toString()),
+            null, null, "observed_at ASC",
+        )
+        cursor.use {
+            while (cursor.moveToNext()) timestamps += cursor.getLong(0)
+        }
+        return com.skarian.airquality.requiredHistoryLookbackSeconds(
+            timestamps, nowEpochSeconds, windowSeconds,
+        )
+    }
+
     fun snapshot(
         address: String,
         location: String,

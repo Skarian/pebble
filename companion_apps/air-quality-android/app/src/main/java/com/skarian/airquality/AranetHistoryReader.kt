@@ -22,9 +22,13 @@ class AranetHistoryReader(private val context: Context) {
         deviceName: String,
         batteryPercent: Int,
         co2State: Int,
+        lookbackSeconds: Long = 8L * 24 * 60 * 60,
         complete: (Result<List<AranetReading>>) -> Unit,
     ) {
-        Session(context, address, deviceName, batteryPercent, co2State, complete).start()
+        Session(
+            context, address, deviceName, batteryPercent, co2State,
+            lookbackSeconds, complete,
+        ).start()
     }
 
     private class Session(
@@ -33,6 +37,7 @@ class AranetHistoryReader(private val context: Context) {
         private val deviceName: String,
         private val batteryPercent: Int,
         private val co2State: Int,
+        private val lookbackSeconds: Long,
         private val complete: (Result<List<AranetReading>>) -> Unit,
     ) : BluetoothGattCallback() {
         private val handler = Handler(Looper.getMainLooper())
@@ -120,8 +125,10 @@ class AranetHistoryReader(private val context: Context) {
                 State.INTERVAL -> {
                     intervalSeconds = u16(bytes)
                     if (intervalSeconds <= 0) { fail("Aranet4 history interval is invalid"); return }
-                    val wanted = (RETENTION_SECONDS / intervalSeconds + 2).toInt()
-                    sampleCount = minOf(totalReadings, wanted)
+                    sampleCount = historySampleCount(
+                        totalReadings, intervalSeconds,
+                        minOf(lookbackSeconds, RETENTION_SECONDS),
+                    )
                     requestedStart = totalReadings - sampleCount + 1
                     AranetHistoryProtocol.PARAMETERS.forEach {
                         values[it] = IntArray(sampleCount) { UNAVAILABLE }

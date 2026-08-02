@@ -61,7 +61,11 @@ If the sensor appears without a reading, open Aranet Home and enable
 
 After you choose a sensor, the companion imports up to eight days of readings
 already stored in the Aranet4. It then saves each new reading it sees. The
-database retains eight days.
+database retains eight days. Before returning a chart, the companion checks the
+selected time window for gaps longer than 15 minutes. When it finds one, it
+requests only the missing tail of the Aranet4's on-device history and merges it
+into the database by timestamp. Normal refreshes with continuous data do not
+open a history connection.
 
 All three chart scales use the same rolling time-series view. The graph has 56
 time columns, which is the useful horizontal resolution at Pebble size. Every
@@ -74,7 +78,8 @@ delay does not leave a misleading blank section before `LAST`. An isolated
 average is shown as a short line. Five labels on the left mark the top, bottom,
 and three evenly spaced values between them. The chart has no point markers.
 Chart pages use the bottom row for the average or `NO HISTORY`. The
-current-reading page still shows the update age.
+current-reading page still shows the update age. The initial chart scale is one
+day; Select cycles through one day, one week, and one hour.
 
 The first import can take a few seconds. If the sensor does not offer saved
 history, new readings still build the charts normally. Tap **Refresh now** in

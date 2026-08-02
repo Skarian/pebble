@@ -5,7 +5,7 @@
 #define GRAPH_COLUMNS 56
 #define AXIS_LEVELS 5
 #define PAGE_COUNT 5
-#define CACHE_VERSION 5
+#define CACHE_VERSION 6
 #define PERSIST_KEY_CACHE 4102
 #define UNAVAILABLE INT32_MIN
 #define RESPONSE_TIMEOUT_MS 30000
@@ -13,6 +13,7 @@
 
 enum { COMMAND_FETCH = 1, COMMAND_PHONE_READY = 2, COMMAND_SCALE = 3 };
 enum { SCALE_HOUR = 0, SCALE_DAY = 1, SCALE_WEEK = 2, SCALE_COUNT = 3 };
+#define DEFAULT_SCALE SCALE_DAY
 enum {
   STATUS_OK = 0, STATUS_SETUP = 1, STATUS_COMPANION = 2,
   STATUS_BLUETOOTH = 3, STATUS_PERMISSION = 4, STATUS_SENSOR = 5,
@@ -45,8 +46,8 @@ static bool s_scale_loading;
 static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
 static uint16_t s_request_id;
-static uint8_t s_scale;
-static uint8_t s_pending_scale;
+static uint8_t s_scale = DEFAULT_SCALE;
+static uint8_t s_pending_scale = DEFAULT_SCALE;
 static uint8_t s_request_command;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESSURE"};
@@ -442,7 +443,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     int32_t battery = tuple_i32(iter, MESSAGE_KEY_BATTERY, 255);
     next.battery = battery >= 0 && battery <= 100 ? (uint8_t)battery : 255;
     next.scale = (uint8_t)tuple_i32(iter, MESSAGE_KEY_SCALE, s_scale);
-    if (next.scale >= SCALE_COUNT) next.scale = SCALE_HOUR;
+    if (next.scale >= SCALE_COUNT) next.scale = DEFAULT_SCALE;
     s_scale = next.scale;
     next.observed_at = observed->value->uint32;
     next.window_start = (uint32_t)tuple_i32(iter, MESSAGE_KEY_WINDOW_START, 0);
@@ -531,7 +532,7 @@ static void init(void) {
       persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) == sizeof(s_cache) &&
       s_cache.version == CACHE_VERSION) {
     s_has_cache = true; s_status = STATUS_OK;
-    s_scale = s_cache.scale < SCALE_COUNT ? s_cache.scale : SCALE_HOUR;
+    s_scale = s_cache.scale < SCALE_COUNT ? s_cache.scale : DEFAULT_SCALE;
   }
   s_window = window_create();
   window_set_background_color(s_window, GColorWhite);

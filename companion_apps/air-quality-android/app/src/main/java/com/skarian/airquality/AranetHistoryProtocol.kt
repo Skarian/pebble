@@ -55,3 +55,9 @@ object AranetHistoryProtocol {
     private fun u16(bytes: ByteArray, offset: Int): Int =
         u8(bytes, offset) or (u8(bytes, offset + 1) shl 8)
 }
+
+fun historySampleCount(totalReadings: Int, intervalSeconds: Int, lookbackSeconds: Long): Int {
+    if (totalReadings <= 0 || intervalSeconds <= 0) return 0
+    val wanted = lookbackSeconds.coerceAtLeast(0) / intervalSeconds + 2
+    return minOf(totalReadings.toLong(), wanted).toInt()
+}

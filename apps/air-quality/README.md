@@ -19,7 +19,8 @@ chart screens cover the last hour, day, or week.
 - Open AirQuality to refresh the current reading.
 - Press Select on the main screen to refresh again.
 - Press Up or Down to move between the current reading and four charts.
-- Press Select on a chart to switch between one hour, one day, and one week.
+- Charts open at one day. Press Select to switch between one day, one week,
+  and one hour.
 
 The watch keeps the last good reading when the sensor or phone is unavailable.
 The current-reading screen shows how old that reading is.

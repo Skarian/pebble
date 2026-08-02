@@ -7,6 +7,13 @@ import org.junit.Test
 
 class AranetHistoryProtocolTest {
     @Test
+    fun limitsHistoryTransfersToTheRequestedTail() {
+        assertEquals(14, historySampleCount(2_000, 300, 3_600))
+        assertEquals(5, historySampleCount(5, 300, 3_600))
+        assertEquals(0, historySampleCount(2_000, 0, 3_600))
+    }
+
+    @Test
     fun encodesV2RequestAndParsesTemperaturePacket() {
         assertArrayEquals(
             byteArrayOf(0x61, 0x01, 0xDE.toByte(), 0x01),

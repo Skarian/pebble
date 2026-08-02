@@ -6,6 +6,26 @@ import org.junit.Test
 
 class SnapshotAggregatorTest {
     @Test
+    fun requestsOnlyTheTailNeededToRepairChartHistory() {
+        val now = 3_600L
+        val continuous = (0L..now step 300).toList()
+        assertNull(requiredHistoryLookbackSeconds(continuous, now, 3_600))
+
+        assertEquals(
+            3_600L,
+            requiredHistoryLookbackSeconds(listOf(now - 1_200, now - 300), now, 3_600),
+        )
+        assertEquals(
+            3_000L,
+            requiredHistoryLookbackSeconds(
+                listOf(0, 300, 600, 2_400, 2_700, 3_000, 3_300, 3_600),
+                now,
+                3_600,
+            ),
+        )
+    }
+
+    @Test
     fun averagesEveryReadingInEachScreenColumn() {
         val readings = listOf(
             reading(10, 600),

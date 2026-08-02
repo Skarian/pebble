@@ -1,5 +1,6 @@
 package com.skarian.airquality
 
+import android.util.Log
 import io.rebble.pebblekit2.client.BasePebbleListenerService
 import io.rebble.pebblekit2.client.DefaultPebbleSender
 import io.rebble.pebblekit2.common.model.PebbleDictionary
@@ -11,6 +12,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -20,6 +23,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
     override val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val latestRequest = AtomicInteger(0)
     private val appUuid = UUID.fromString(PebbleProtocol.APP_UUID)
+    private val historyMutex = Mutex()
 
     override suspend fun onMessageReceived(
         watchappUUID: UUID,
@@ -65,6 +69,8 @@ class AirQualityPebbleService : BasePebbleListenerService() {
             sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_SETUP, requestId), watch)
             return
         }
+        backfillHistoryIfNeeded(address, settings.watchName, scale)
+        if (latestRequest.get() != requestId) return
         if (refreshSensor) {
             val scanner = AranetScanner(this)
             if (!scanner.hasPermissions()) {
@@ -100,6 +106,38 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         sendIfCurrent(requestId, PebbleProtocol.snapshot(snapshot, requestId, now), watch)
     }
 
+    private suspend fun backfillHistoryIfNeeded(
+        address: String,
+        location: String,
+        scale: ChartScale,
+    ) = historyMutex.withLock {
+        val scanner = AranetScanner(this)
+        if (!scanner.hasPermissions() || !scanner.bluetoothEnabled()) return@withLock
+        val now = Instant.now().epochSecond
+        val (lookbackSeconds, current) = ReadingStore(this).use { store ->
+            store.requiredHistoryLookbackSeconds(address, now, scale.windowSeconds) to
+                store.snapshot(address, location, now, scale)?.current
+        }
+        if (lookbackSeconds == null || current == null) return@withLock
+        val result = suspendCancellableCoroutine<Result<List<AranetReading>>> { continuation ->
+            AranetHistoryReader(applicationContext).import(
+                address = address,
+                deviceName = current.deviceName,
+                batteryPercent = current.batteryPercent,
+                co2State = current.co2State,
+                lookbackSeconds = lookbackSeconds,
+            ) { imported ->
+                if (continuation.isActive) continuation.resume(imported)
+            }
+        }
+        result.onSuccess { readings ->
+            ReadingStore(this).use { it.saveAll(readings) }
+            Log.i(HISTORY_LOG_TAG, "Backfilled ${readings.size} saved readings")
+        }.onFailure { error ->
+            Log.w(HISTORY_LOG_TAG, "Automatic history backfill failed: ${error.message}")
+        }
+    }
+
     private suspend fun sendIfCurrent(
         requestId: Int,
         data: PebbleDictionary,
@@ -115,5 +153,9 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         } finally {
             sender.close()
         }
+    }
+
+    companion object {
+        private const val HISTORY_LOG_TAG = "AirQualityHistory"
     }
 }
