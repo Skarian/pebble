@@ -3,6 +3,7 @@
 
 #define METRICS 4
 #define GRAPH_COLUMNS 56
+#define AXIS_LEVELS 5
 #define PAGE_COUNT 5
 #define CACHE_VERSION 5
 #define PERSIST_KEY_CACHE 4102
@@ -50,6 +51,7 @@ static uint8_t s_request_command;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESSURE"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESSURE"};
+static const char *GRAPH_UNITS[] = {"ppm", "F", "%", "hPa"};
 static const char *SCALE_NAMES[] = {"1 HOUR", "1 DAY", "1 WEEK"};
 static const char *AXIS_LEFT[] = {"-1 HR", "-1 DAY", "-1 WEEK"};
 static const char *AXIS_MIDDLE[] = {"-30 MIN", "-12 HR", "-3 DAYS"};
@@ -208,20 +210,41 @@ static void draw_current(GContext *ctx, GRect bounds) {
   draw_footer(ctx, bounds);
 }
 
-static void graph_range(int metric, int32_t *minimum, int32_t *maximum) {
+static int32_t graph_display_value(int metric, int32_t value) {
+  return metric == 1 ? (value * 9 + (value >= 0 ? 2 : -2)) / 5 + 320 : value;
+}
+
+static int32_t floor_to_step(int32_t value, int32_t step) {
+  return value >= 0 ? (value / step) * step
+                    : -(((-value + step - 1) / step) * step);
+}
+
+static bool graph_range(int metric, int32_t *minimum, int32_t *maximum) {
   int32_t low = INT32_MAX, high = INT32_MIN;
   for (int column = 0; column < GRAPH_COLUMNS; column++) {
     int16_t value = s_cache.series[metric][column];
     if (value == INT16_MIN) continue;
+    value = graph_display_value(metric, value);
     if (value < low) low = value;
     if (value > high) high = value;
   }
-  if (low == INT32_MAX) { *minimum = 0; *maximum = 1; return; }
-  const int32_t steps[] = {100, 10, 20, 10};
-  int32_t step = steps[metric];
-  *minimum = low >= 0 ? (low / step) * step : -(((-low + step - 1) / step) * step);
-  *maximum = high >= 0 ? ((high + step - 1) / step) * step : -((-high / step) * step);
-  if (*maximum <= *minimum) { *minimum -= step; *maximum += step; }
+  if (low == INT32_MAX) { *minimum = 0; *maximum = 1; return false; }
+  const int32_t quantums[] = {50, 10, 10, 10};
+  int32_t quantum = quantums[metric];
+  if (low == high) {
+    *minimum = floor_to_step(low, quantum) - 2 * quantum;
+    *maximum = *minimum + (AXIS_LEVELS - 1) * quantum;
+    return true;
+  }
+  int32_t target = (high - low + AXIS_LEVELS - 2) / (AXIS_LEVELS - 1);
+  int32_t step = ((target + quantum - 1) / quantum) * quantum;
+  do {
+    *minimum = floor_to_step(low, step);
+    *maximum = *minimum + (AXIS_LEVELS - 1) * step;
+    if (*maximum >= high) break;
+    step += quantum;
+  } while (true);
+  return true;
 }
 
 static int graph_y(int32_t value, int32_t minimum, int32_t maximum,
@@ -233,43 +256,60 @@ static int graph_y(int32_t value, int32_t minimum, int32_t maximum,
   return bottom - height;
 }
 
+static void format_axis_value(char *buffer, size_t size, int metric, int32_t value) {
+  if (metric == 0) snprintf(buffer, size, "%ld", (long)value);
+  else snprintf(buffer, size, "%ld", (long)(value / 10));
+}
+
+static void draw_chart_guide(GContext *ctx, int left, int right, int y,
+                             bool boundary) {
+  graphics_context_set_stroke_color(ctx, boundary ? GColorBlack : GColorLightGray);
+  if (boundary) {
+    graphics_draw_line(ctx, GPoint(left, y), GPoint(right, y));
+    return;
+  }
+  for (int x = left; x <= right; x += 6) {
+    int end = x + 2 < right ? x + 2 : right;
+    graphics_draw_line(ctx, GPoint(x, y), GPoint(end, y));
+  }
+}
+
 static void draw_chart(GContext *ctx, GRect bounds) {
   int metric = s_page - 1;
-  char range_text[48];
   char stat[48];
   draw_header(ctx, bounds, s_cache.location, GRAPH_NAMES[metric]);
   int32_t minimum, maximum;
-  graph_range(metric, &minimum, &maximum);
-  if (metric == 0) {
-    if (minimum == 0) snprintf(range_text, sizeof(range_text), "%ld ppm", (long)maximum);
-    else snprintf(range_text, sizeof(range_text), "%ld-%ld", (long)minimum, (long)maximum);
-  } else if (metric == 1) {
-    int32_t low_f = (minimum * 9) / 5 + 320;
-    int32_t high_f = (maximum * 9) / 5 + 320;
-    snprintf(range_text, sizeof(range_text), "%ld-%ld F", (long)(low_f / 10), (long)(high_f / 10));
-  } else if (metric == 2) {
-    snprintf(range_text, sizeof(range_text), "%ld-%ld%%",
-             (long)(minimum / 10), (long)(maximum / 10));
-  } else {
-    snprintf(range_text, sizeof(range_text), "%ld-%ld",
-             (long)(minimum / 10), (long)(maximum / 10));
-  }
+  bool has_history = graph_range(metric, &minimum, &maximum);
   draw_text(ctx, SCALE_NAMES[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
             GRect(8, 32, 70, 24), GTextAlignmentLeft, GColorBlack);
-  draw_text(ctx, range_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+  draw_text(ctx, GRAPH_UNITS[metric], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
             GRect(70, 30, bounds.size.w - 78, 28), GTextAlignmentRight, GColorBlack);
-  const int left = 9, right = bounds.size.w - 9, top = 58, bottom = 151;
-  graphics_context_set_stroke_color(ctx, GColorBlack);
+  const int left = 36, right = bounds.size.w - 2, top = 66, bottom = 174;
   graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(left, top), GPoint(right, top));
-  graphics_draw_line(ctx, GPoint(left, bottom), GPoint(right, bottom));
+  if (has_history) {
+    GFont axis_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    char axis_text[16];
+    for (int level = 0; level < AXIS_LEVELS; level++) {
+      int y = top + (level * (bottom - top)) / (AXIS_LEVELS - 1);
+      int32_t value = maximum - (level * (maximum - minimum)) / (AXIS_LEVELS - 1);
+      draw_chart_guide(ctx, left, right, y, level == 0 || level == AXIS_LEVELS - 1);
+      format_axis_value(axis_text, sizeof(axis_text), metric, value);
+      draw_text(ctx, axis_text, axis_font, GRect(0, y - 10, 36, 22),
+                GTextAlignmentRight, GColorBlack);
+    }
+  } else {
+    draw_chart_guide(ctx, left, right, top, true);
+    draw_chart_guide(ctx, left, right, bottom, true);
+  }
+  graphics_context_set_stroke_color(ctx, GColorBlack);
   GPoint previous = GPointZero;
   bool has_previous = false;
   for (int column = 0; column < GRAPH_COLUMNS; column++) {
     int16_t value = s_cache.series[metric][column];
     int x = left + (column * (right - left)) / (GRAPH_COLUMNS - 1);
     if (value != INT16_MIN) {
-      GPoint point = GPoint(x, graph_y(value, minimum, maximum, top, bottom));
+      GPoint point = GPoint(x, graph_y(graph_display_value(metric, value),
+                                       minimum, maximum, top, bottom));
       bool connects_previous = has_previous;
       int next_column = column + 1;
       while (next_column < GRAPH_COLUMNS && s_cache.series[metric][next_column] == INT16_MIN)
@@ -291,20 +331,20 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   graphics_draw_line(ctx, GPoint(left, bottom), GPoint(left, bottom - 4));
   graphics_draw_line(ctx, GPoint(middle_x, bottom), GPoint(middle_x, bottom - 4));
   graphics_draw_line(ctx, GPoint(right, bottom), GPoint(right, bottom - 4));
-  draw_text(ctx, AXIS_LEFT[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+  GFont time_axis_font = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  draw_text(ctx, AXIS_LEFT[s_scale], time_axis_font,
             GRect(left, bottom + 1, 68, 22), GTextAlignmentLeft, GColorBlack);
-  draw_text(ctx, AXIS_MIDDLE[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+  draw_text(ctx, AXIS_MIDDLE[s_scale], time_axis_font,
             GRect(middle_x - 34, bottom + 1, 68, 22),
             GTextAlignmentCenter, GColorBlack);
-  draw_text(ctx, "LAST", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+  draw_text(ctx, "LAST", time_axis_font,
             GRect(right - 45, bottom + 1, 45, 22), GTextAlignmentRight, GColorBlack);
   if (s_cache.average[metric] != UNAVAILABLE) {
     char avg[24]; format_metric(avg, sizeof(avg), metric, s_cache.average[metric]);
     snprintf(stat, sizeof(stat), "AVG %s", avg);
   } else snprintf(stat, sizeof(stat), "NO HISTORY");
   draw_text(ctx, stat, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 174, bounds.size.w - 16, 28), GTextAlignmentCenter, GColorBlack);
-  draw_footer(ctx, bounds);
+            GRect(8, 198, bounds.size.w - 16, 28), GTextAlignmentCenter, GColorBlack);
 }
 
 static void canvas_update(Layer *layer, GContext *ctx) {

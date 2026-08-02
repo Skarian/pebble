@@ -22,7 +22,7 @@ chart screens cover the last hour, day, or week.
 - Press Select on a chart to switch between one hour, one day, and one week.
 
 The watch keeps the last good reading when the sensor or phone is unavailable.
-The update line always shows how old that reading is.
+The current-reading screen shows how old that reading is.
 
 ## What you need
 

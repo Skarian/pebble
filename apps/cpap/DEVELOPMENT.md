@@ -60,7 +60,9 @@ restarts, but uninstalling CPAP or clearing the Pebble app's data removes them.
 The day details and graphs form one bounded vertical list: the oldest day is at
 the top, yesterday sits below the other day pages, and the five graphs sit below
 yesterday. Graph bars run oldest-to-yesterday from left to right. Missing days
-use a dash instead of a zero-height bar.
+use a dash instead of a zero-height bar. Five labels on the left mark the graph
+scale. The average appears below the graph rather than as another line across
+the bars.
 
 ## Direct ResMed connection
 

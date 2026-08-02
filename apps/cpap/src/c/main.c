@@ -1,6 +1,7 @@
 #include <pebble.h>
 
 #define DAYS 7
+#define AXIS_LEVELS 5
 #define CACHE_VERSION 3
 #define PERSIST_KEY_CACHE 100
 #define RESPONSE_TIMEOUT_MS 30000
@@ -274,33 +275,48 @@ static uint32_t graph_scale_max(uint8_t view) {
     if (available && value > maximum) maximum = value;
   }
   if (view == VIEW_SCORE_GRAPH) {
-    maximum = maximum ? ((maximum + 9) / 10) * 10 : 10;
-    return maximum > 100 ? 100 : maximum;
+    return 100;
   }
   if (view == VIEW_USAGE_GRAPH) {
-    return maximum ? ((maximum + 59) / 60) * 60 : 60;
+    return maximum ? ((maximum + 119) / 120) * 120 : 120;
   }
   if (view == VIEW_EVENTS_GRAPH) {
-    if (!maximum) return 1;
-    uint32_t step = maximum <= 10 ? 1 : maximum <= 50 ? 5 : 10;
-    return ((maximum + step - 1) / step) * step;
+    return maximum ? ((maximum + 19) / 20) * 20 : 20;
+  }
+  if (view == VIEW_MASK_GRAPH) {
+    return maximum ? ((maximum + 3) / 4) * 4 : 4;
   }
   if (view == VIEW_LEAK_GRAPH) {
-    return maximum ? ((maximum + 9) / 10) * 10 : 10;
+    return maximum ? ((maximum + 39) / 40) * 40 : 40;
   }
-  return maximum ? maximum : 1;
+  return 4;
 }
 
-static void format_graph_max(char *buffer, size_t size, uint8_t view, uint32_t maximum) {
+static void format_graph_axis(char *buffer, size_t size, uint8_t view, uint32_t value) {
   if (view == VIEW_USAGE_GRAPH) {
-    snprintf(buffer, size, "%luh", (unsigned long)(maximum / 60));
-  } else if (view == VIEW_EVENTS_GRAPH) {
-    snprintf(buffer, size, "%lu.%lu/hr", (unsigned long)(maximum / 10),
-             (unsigned long)(maximum % 10));
-  } else if (view == VIEW_LEAK_GRAPH) {
-    snprintf(buffer, size, "%lu L/m", (unsigned long)(maximum / 10));
+    if (!value) snprintf(buffer, size, "0");
+    else if (value % 60 == 0) snprintf(buffer, size, "%luh", (unsigned long)(value / 60));
+    else snprintf(buffer, size, "%luh%02lu", (unsigned long)(value / 60),
+                  (unsigned long)(value % 60));
+  } else if (view == VIEW_EVENTS_GRAPH || view == VIEW_LEAK_GRAPH) {
+    if (value % 10 == 0) snprintf(buffer, size, "%lu", (unsigned long)(value / 10));
+    else snprintf(buffer, size, "%lu.%lu", (unsigned long)(value / 10),
+                  (unsigned long)(value % 10));
   } else {
-    snprintf(buffer, size, "%lu", (unsigned long)maximum);
+    snprintf(buffer, size, "%lu", (unsigned long)value);
+  }
+}
+
+static void draw_graph_guide(GContext *ctx, int left, int right, int y,
+                             bool boundary) {
+  graphics_context_set_stroke_color(ctx, boundary ? GColorBlack : GColorLightGray);
+  if (boundary) {
+    graphics_draw_line(ctx, GPoint(left, y), GPoint(right, y));
+    return;
+  }
+  for (int x = left; x <= right; x += 6) {
+    int end = x + 2 < right ? x + 2 : right;
+    graphics_draw_line(ctx, GPoint(x, y), GPoint(end, y));
   }
 }
 
@@ -331,22 +347,20 @@ static void format_graph_average(char *buffer, size_t size, uint8_t view,
 
 static void graph_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  const int chart_left = 8;
+  const int chart_left = 38;
   const int chart_right = bounds.size.w - 8;
   const int chart_top = 32;
-  const int chart_bottom = 151;
+  const int chart_bottom = 152;
   const int chart_height = chart_bottom - chart_top;
   const int slot_width = (chart_right - chart_left) / DAYS;
-  const int bar_width = 16;
-  const int average_marker_tip = bounds.size.w - 13;
-  const int average_marker_base = average_marker_tip + 6;
-  const int average_marker_bar = average_marker_base + 2;
+  const int bar_width = 14;
   GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont axis_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   GFont stat_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   uint32_t maximum = graph_scale_max(s_view);
   uint32_t average_total = 0;
   uint8_t average_days = 0;
-  static char max_text[16];
+  static char axis_text[16];
   static char average_text[24];
   static char weekday_text[2];
 
@@ -358,26 +372,19 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
       average_days++;
     }
   }
-  int average_y = average_days && maximum
-    ? chart_bottom - (int)((average_total * chart_height) /
-                           ((uint32_t)average_days * maximum)) : -1;
 
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
-  format_graph_max(max_text, sizeof(max_text), s_view, maximum);
-  graphics_draw_text(ctx, max_text, stat_font,
-                     GRect(chart_left, 0, chart_right - chart_left, 28),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
-  graphics_draw_line(ctx, GPoint(chart_left, chart_top),
-                     GPoint(chart_right, chart_top));
-  graphics_draw_line(ctx, GPoint(chart_left, chart_bottom),
-                     GPoint(chart_right, chart_bottom));
-  for (int x = chart_left; average_y >= 0 && x < average_marker_tip; x += 6) {
-    graphics_draw_line(ctx, GPoint(x, average_y),
-                       GPoint(x + 2 < average_marker_tip ? x + 2 : average_marker_tip,
-                              average_y));
+  for (int level = 0; level < AXIS_LEVELS; level++) {
+    int y = chart_top + (level * chart_height) / (AXIS_LEVELS - 1);
+    uint32_t value = maximum - (level * maximum) / (AXIS_LEVELS - 1);
+    draw_graph_guide(ctx, chart_left, chart_right, y,
+                     level == 0 || level == AXIS_LEVELS - 1);
+    format_graph_axis(axis_text, sizeof(axis_text), s_view, value);
+    graphics_draw_text(ctx, axis_text, axis_font, GRect(1, y - 11, 36, 22),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
   }
+  graphics_context_set_stroke_color(ctx, GColorBlack);
 
   for (int column = 0; column < DAYS; column++) {
     int day_index = DAYS - 1 - column;
@@ -411,17 +418,6 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, weekday_text, label_font,
                        GRect(center_x - slot_width / 2, chart_bottom, slot_width, 22),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-  }
-
-  if (average_y >= 0) {
-    for (int x = 0; x <= average_marker_base - average_marker_tip; x++) {
-      int half_height = x < 5 ? x : 5;
-      graphics_draw_line(ctx,
-                         GPoint(average_marker_tip + x, average_y - half_height),
-                         GPoint(average_marker_tip + x, average_y + half_height));
-    }
-    graphics_fill_rect(ctx, GRect(average_marker_bar, average_y - 5, 3, 11),
-                       0, GCornerNone);
   }
 
   format_graph_average(average_text, sizeof(average_text), s_view,

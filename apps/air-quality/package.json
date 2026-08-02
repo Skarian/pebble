@@ -35,6 +35,16 @@
       "AVG_CO2": 64, "AVG_TEMP_X10": 65,
       "AVG_HUMIDITY_X10": 66, "AVG_PRESSURE_X10": 67
     },
-    "resources": {"media": []}
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true,
+          "memoryFormat": "1Bit"
+        }
+      ]
+    }
   }
 }

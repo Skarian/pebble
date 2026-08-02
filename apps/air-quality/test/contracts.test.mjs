@@ -10,6 +10,17 @@ const scanner = readFileSync(new URL('../../../companion_apps/air-quality-androi
 const protocol = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/PebbleProtocol.kt', import.meta.url), 'utf8');
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
 
+test('app packages a dedicated one-bit menu icon', () => {
+  assert.deepEqual(packageJson.pebble.resources.media, [{
+    type: 'bitmap',
+    name: 'IMAGE_MENU_ICON',
+    file: 'images/menu_icon.png',
+    menuIcon: true,
+    memoryFormat: '1Bit'
+  }]);
+  assert.equal(existsSync(new URL('../resources/images/menu_icon.png', import.meta.url)), true);
+});
+
 test('watch keeps a new versioned last-good cache and rejects stale responses', () => {
   assert.match(watch, /CACHE_VERSION 5/);
   assert.match(watch, /PROTOCOL_VERSION 2/);
@@ -73,6 +84,13 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /draw_text\(ctx, "LAST"/);
   assert.doesNotMatch(watch, /if \(s_scale == SCALE_WEEK\)/);
   assert.match(watch, /GRAPH_COLUMNS 56/);
+  assert.match(watch, /AXIS_LEVELS 5/);
+  assert.match(watch, /const int left = 36, right = bounds\.size\.w - 2, top = 66, bottom = 174/);
+  assert.match(watch, /level \* \(bottom - top\)\) \/ \(AXIS_LEVELS - 1\)/);
+  assert.match(watch, /axis_font = fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
+  assert.match(watch, /GRect\(0, y - 10, 36, 22\)/);
+  assert.match(watch, /GColorLightGray/);
+  assert.match(watch, /graph_display_value\(metric, value\)/);
   assert.match(watch, /int16_t value = s_cache\.series/);
   assert.match(watch, /series->length != GRAPH_COLUMNS \* 2/);
   assert.doesNotMatch(watch, /connect_gap|previous_column/);
@@ -82,6 +100,14 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);
   assert.match(watch, /!connects_next/);
   assert.match(watch, /GPoint\(tick_left, point\.y\), GPoint\(tick_right, point\.y\)/);
+  assert.match(watch, /snprintf\(stat, sizeof\(stat\), "AVG %s", avg\)/);
+  assert.match(watch, /GRect\(8, 198, bounds\.size\.w - 16, 28\)/);
+  const chartSource = watch.slice(watch.indexOf('static void draw_chart'),
+    watch.indexOf('static void canvas_update'));
+  const currentSource = watch.slice(watch.indexOf('static void draw_current'),
+    watch.indexOf('static int32_t graph_display_value'));
+  assert.doesNotMatch(chartSource, /draw_footer/);
+  assert.match(currentSource, /draw_footer\(ctx, bounds\)/);
 });
 
 test('current state uses the three Aranet display states and concise stale copy', () => {
