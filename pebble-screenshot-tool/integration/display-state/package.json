@@ -1,0 +1,17 @@
+{
+  "name": "display-state",
+  "author": "Pebble Screenshot Tool",
+  "version": "1.0.0",
+  "private": true,
+  "pebble": {
+    "displayName": "Display State",
+    "uuid": "b8c90dc0-5f58-4ac8-9d8b-c97e9ad54756",
+    "projectType": "moddable",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery", "gabbro"],
+    "watchapp": {"watchface": true},
+    "messageKeys": ["dummy"],
+    "resources": {"media": []}
+  }
+}

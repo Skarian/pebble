@@ -1,0 +1,14 @@
+{
+  "name": "pebble-screenshot-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pebble-screenshot": "./pebble-screenshot.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:emulator-input": "./integration/run-input-stress.sh",
+    "test:platforms": "./integration/run-platform-matrix.sh"
+  }
+}

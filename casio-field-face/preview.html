@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casio Field Face — Time 2 Preview</title>
+<style>
+  :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111512; color: #efebd4; }
+  .device { width: min(86vw, 420px); padding: 30px 22px; border: 8px solid #333b35; border-radius: 30px; background: #1c211d; box-shadow: 0 22px 60px #0008; }
+  .screen { aspect-ratio: 200 / 228; box-sizing: border-box; padding: 20px; background: #efebd4; color: #0f1613; border-radius: 7px; display: grid; grid-template-rows: auto 4px auto 1fr auto auto auto; gap: 11px; }
+  .label, .topline, .footer { font-size: clamp(10px, 2.5vw, 14px); letter-spacing: .12em; font-weight: 800; }
+  .topline { display: flex; justify-content: space-between; }
+  .rule { background: #da692a; }
+  #date { color: #596254; text-align: center; font-size: clamp(13px, 3.2vw, 18px); font-weight: 800; }
+  #time { align-self: center; text-align: center; font-size: clamp(52px, 16vw, 90px); font-weight: 900; letter-spacing: -.1em; }
+  .divider { height: 2px; background: #0f1613; }
+  .data { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .data > div:last-child { text-align: right; }
+  .value { margin-top: 5px; font-size: clamp(14px, 3.5vw, 20px); font-weight: 900; }
+  .footer { color: #da692a; }
+  .hint { margin: 18px 0 0; color: #afb6a5; font: 13px system-ui, sans-serif; text-align: center; }
+</style>
+<main class="device"><section class="screen" aria-label="Pebble Time 2 face preview">
+  <div class="topline"><span>FIELD TIME</span><span>TIME 2</span></div>
+  <div class="rule"></div>
+  <div id="date"></div>
+  <div id="time"></div>
+  <div class="divider"></div>
+  <div class="data"><div><div class="label">WEATHER</div><div class="value">--° SYNC NEXT</div></div><div><div class="label">BATTERY</div><div class="value">OK</div></div></div>
+  <div class="footer">TAP: DETAILS</div>
+</section><p class="hint">Browser layout preview — the Pebble project remains in the same folder.</p></main>
+<script>
+  const days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  function render() {
+    const now = new Date();
+    document.querySelector('#date').textContent = `${days[now.getDay()]}  ${months[now.getMonth()]} ${now.getDate()}`;
+    document.querySelector('#time').textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  }
+  render(); setInterval(render, 1000);
+</script>
+</html>

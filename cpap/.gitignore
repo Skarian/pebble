@@ -1,0 +1,10 @@
+build/
+data/
+qa-results/
+screenshots/
+.env
+*.pbw
+*.log
+.DS_Store
+.lock-waf_*
+screenshot_*.png

@@ -1,0 +1,17 @@
+{
+  "name": "button-state",
+  "author": "Pebble Screenshot Tool",
+  "version": "1.0.0",
+  "private": true,
+  "pebble": {
+    "displayName": "Button State",
+    "uuid": "e9df3125-a8ed-46d0-bcd4-28a438f84e84",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": [
+      "aplite", "basalt", "chalk", "diorite", "emery", "flint", "gabbro"
+    ],
+    "watchapp": {"watchface": false},
+    "resources": {"media": []}
+  }
+}
