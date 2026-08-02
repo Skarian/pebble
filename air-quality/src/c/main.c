@@ -82,11 +82,11 @@ static void format_age(char *buffer, size_t size) {
   else snprintf(buffer, size, "Updated %lud ago", (unsigned long)(age / 86400));
 }
 
-static void draw_header(GContext *ctx, GRect bounds, const char *title) {
-  graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 30), 0, GCornerNone);
-  draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, -1, bounds.size.w - 16, 30), GTextAlignmentCenter, GColorWhite);
+static void draw_header(GContext *ctx, GRect bounds, const char *left, const char *right) {
+  draw_text(ctx, left, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+            GRect(8, 0, 118, 28), GTextAlignmentLeft, GColorBlack);
+  draw_text(ctx, right, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+            GRect(122, 0, bounds.size.w - 130, 28), GTextAlignmentRight, GColorBlack);
 }
 
 static void draw_footer(GContext *ctx, GRect bounds) {
@@ -96,11 +96,9 @@ static void draw_footer(GContext *ctx, GRect bounds) {
   if (s_loading) snprintf(footer, sizeof(footer), "SYNCING...");
   else if (s_status >= STATUS_AUTH && s_status <= STATUS_SERVICE)
     snprintf(footer, sizeof(footer), "ERROR  PRESS SELECT TO RETRY");
-  else if (s_status == STATUS_PARTIAL) snprintf(footer, sizeof(footer), "Partial - %s", age);
+  else if (s_status == STATUS_PARTIAL) snprintf(footer, sizeof(footer), "%s", age);
   else if (s_cache.flags & FLAG_STALE) snprintf(footer, sizeof(footer), "Stale - %s", age);
   else snprintf(footer, sizeof(footer), "%s", age);
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(8, bounds.size.h - 19), GPoint(bounds.size.w - 8, bounds.size.h - 19));
   draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_14),
             GRect(5, bounds.size.h - 18, bounds.size.w - 10, 18), GTextAlignmentCenter, GColorBlack);
 }
@@ -115,7 +113,7 @@ static void draw_state(GContext *ctx, GRect bounds) {
   else if (s_status == STATUS_PHONE || s_status == STATUS_NETWORK) { title = "ERROR"; body = "Phone cannot be reached"; footer = "PRESS SELECT TO RETRY"; }
   else if (s_status == STATUS_TIMEOUT) { title = "ERROR"; body = "Refresh timed out"; footer = "PRESS SELECT TO RETRY"; }
   else if (s_status == STATUS_SERVICE) { title = "ERROR"; body = "Aranet is unavailable"; footer = "PRESS SELECT TO RETRY"; }
-  draw_header(ctx, bounds, "AIR QUALITY");
+  draw_header(ctx, bounds, "AIRQUALITY", "");
   bool title_only = body[0] == '\0' && footer[0] == '\0';
   draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
             GRect(8, title_only ? 92 : 68, bounds.size.w - 16, 36), GTextAlignmentCenter, GColorBlack);
@@ -128,7 +126,7 @@ static void draw_state(GContext *ctx, GRect bounds) {
 static void draw_current(GContext *ctx, GRect bounds) {
   char value[28];
   char primary[16];
-  draw_header(ctx, bounds, s_cache.location);
+  draw_header(ctx, bounds, s_cache.location, "AQI");
   if (s_cache.current[0] == UNAVAILABLE) snprintf(primary, sizeof(primary), "--");
   else snprintf(primary, sizeof(primary), "%u", s_cache.current[0]);
   draw_text(ctx, category(s_cache.current[0]), fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
@@ -176,8 +174,8 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   char title[24];
   char max_text[24];
   char stat[48];
-  snprintf(title, sizeof(title), "7-DAY %s", GRAPH_NAMES[metric]);
-  draw_header(ctx, bounds, title);
+  snprintf(title, sizeof(title), "%s", GRAPH_NAMES[metric]);
+  draw_header(ctx, bounds, s_cache.location, title);
   uint16_t maximum = graph_maximum(metric);
   format_metric(max_text, sizeof(max_text), metric, maximum);
   draw_text(ctx, max_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),

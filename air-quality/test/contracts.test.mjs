@@ -33,9 +33,12 @@ test('typography follows CPAP large system-font hierarchy', () => {
   assert.match(watch, /footer, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
 });
 
-test('current page uses the chosen location header and CPAP update wording', () => {
-  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location\)/);
-  assert.doesNotMatch(watch, /draw_header\(ctx, bounds, "AIR QUALITY"\);[\s\S]{0,500}s_cache\.location/);
+test('headers and update footer follow the plain CPAP layout', () => {
+  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "AQI"\)/);
+  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, title\)/);
+  assert.doesNotMatch(watch, /graphics_fill_rect\(ctx, GRect\(0, 0, bounds\.size\.w, 30\)/);
+  assert.doesNotMatch(watch, /bounds\.size\.h - 19/);
+  assert.doesNotMatch(watch, /Partial - %s/);
   assert.match(watch, /Updated just now/);
   assert.match(watch, /Updated %lum ago/);
   assert.match(watch, /Updated %lud ago/);
@@ -54,4 +57,6 @@ test('QA uses the shared lock, isolated flash, and no global emulator kill', () 
   assert.match(qa, /airquality-qa-backup/);
   assert.doesNotMatch(qa, /pebble', \['kill/);
   assert.match(qa, /all-states\.png/);
+  assert.match(qa, /-background', '#0d100e'/);
+  assert.match(qa, /-set', 'label'/);
 });

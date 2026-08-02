@@ -2,8 +2,7 @@
 
 import {spawn, spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
-import {chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {basename, dirname, join, resolve} from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
@@ -155,9 +154,13 @@ async function liveSnapshot(env) {
   return normalized;
 }
 
-function numberedTile(input, output, number, label) {
-  run('magick', [input, '-background', 'white', '-gravity', 'north', '-splice', '0x34',
-    '-fill', 'black', '-font', 'Helvetica-Bold', '-pointsize', '15', '-annotate', '+0+8', `${String(number).padStart(2, '0')}  ${label}`, output]);
+function createBoard(states, output) {
+  const labels = states.flatMap((state, index) => [
+    '(', state.path, '-set', 'label', `${index + 1}. ${state.label}`, ')'
+  ]);
+  run('magick', ['montage', ...labels, '-filter', 'point', '-resize', '400x456',
+    '-tile', '4x', '-geometry', '400x456+24+64', '-background', '#0d100e',
+    '-fill', '#f1f3ec', '-stroke', 'none', '-pointsize', '24', '-depth', '8', output]);
 }
 
 async function main() {
@@ -167,7 +170,6 @@ async function main() {
   const live = source === 'live' ? await liveSnapshot(env) : null;
   const releaseLock = await acquireLock();
   let restoreFlash, session;
-  const scratch = mkdtempSync(join(tmpdir(), 'airquality-qa-'));
   const stamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);
   const output = resolve(ROOT, 'qa-results', `all-screens-${stamp}-${source}`);
   const states = join(output, 'states'); mkdirSync(states, {recursive: true});
@@ -183,8 +185,7 @@ async function main() {
       const filename = `${String(number).padStart(2, '0')}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`;
       const raw = join(states, filename);
       await session.capture(raw, buttons, message);
-      const tile = join(scratch, filename); numberedTile(raw, tile, number, label);
-      manifest.push({number, label, file: `states/${filename}`, tile});
+      manifest.push({number, label, file: `states/${filename}`, path: raw});
     }
     await capture('SETUP REQUIRED', status(1));
     await capture('LOADING', null, ['select']);
@@ -208,14 +209,13 @@ async function main() {
       await capture('LIVE CURRENT', encode(Model.dictionary(live, Date.now(), 0)), ['up', 'up', 'up', 'up', 'up']);
     }
     const board = join(output, 'all-states.png');
-    run('magick', ['montage', ...manifest.map((item) => item.tile), '-tile', '4x', '-geometry', '200x262+12+12', '-background', '#d9d9d9', board]);
-    writeFileSync(join(output, 'manifest.json'), JSON.stringify({source, pbw: PBW, screens: manifest.map(({tile, ...item}) => item)}, null, 2));
+    createBoard(manifest, board);
+    writeFileSync(join(output, 'manifest.json'), JSON.stringify({source, pbw: PBW, screens: manifest.map(({path, ...item}) => item)}, null, 2));
     console.log(`AIRQUALITY_QA_BOARD=${board}`);
     console.log(`AIRQUALITY_PBW=${PBW}`);
   } finally {
     if (session) await session.close();
     if (restoreFlash) restoreFlash();
-    rmSync(scratch, {recursive: true, force: true});
     releaseLock();
   }
 }

@@ -68,8 +68,14 @@ healthy/elevated/hazardous readings, missing and stale data, every graph, and
 all refresh failures. Fake data comes from the QA script; the production app
 contains no fixtures, hidden navigation, localhost route, or QA mode.
 
-The black header on the current page shows this user-chosen name. `HOME` on the
-fake QA board is only an example; it is not read from Aranet automatically.
+The left side of each header shows this user-chosen name; the right side shows
+the current statistic. `HOME` on the fake QA board is only an example and is
+not read from Aranet automatically.
+
+If Aranet omits one current reading, that row shows `--` while the other values
+remain visible. If its seven-day response omits readings, the matching graph
+shows gaps or `NO HISTORY`. The update line always describes the age of the
+usable data on screen; the watch does not use an unexplained "partial" label.
 
 The watch UI follows CPAP's proven type hierarchy: a 42-point primary value,
 24-point bold metric rows and chart statistics, 28-point state titles, and
