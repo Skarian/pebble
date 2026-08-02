@@ -21,7 +21,7 @@ In AirQuality Settings, enter:
 
 1. **Aranet sensor ID**
 2. **Aranet API key**
-3. **Location** — the short name shown on the watch
+3. **Name on watch** — choose a short location name, such as Home or Office
 
 Press **Save and refresh**. The API key stays in this app on your phone and is
 never sent to the watch.
@@ -67,6 +67,9 @@ This one command tests and builds the production PBW, then creates a numbered
 healthy/elevated/hazardous readings, missing and stale data, every graph, and
 all refresh failures. Fake data comes from the QA script; the production app
 contains no fixtures, hidden navigation, localhost route, or QA mode.
+
+The black header on the current page shows this user-chosen name. `HOME` on the
+fake QA board is only an example; it is not read from Aranet automatically.
 
 The watch UI follows CPAP's proven type hierarchy: a 42-point primary value,
 24-point bold metric rows and chart statistics, 28-point state titles, and

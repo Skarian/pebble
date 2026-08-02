@@ -72,7 +72,8 @@ function settingsPage(settings) {
     '<body><main><h1>AirQuality</h1><p>Connect your Aranet sensor.</p><form id="form">' +
     '<label for="share">Aranet sensor ID</label><input id="share" required value="' + escapeHtml(settings.sharingId || '') + '">' +
     '<label for="key">Aranet API key</label><input id="key" type="password" ' + (settings.apiCredential ? 'placeholder="Saved - leave blank to keep"' : 'required') + '>' +
-    '<label for="location">Location</label><input id="location" required maxlength="31" value="' + escapeHtml(settings.location || '') + '">' +
+    '<label for="location">Name on watch</label><input id="location" required maxlength="20" placeholder="Home" value="' + escapeHtml(settings.location || '') + '">' +
+    '<p class="note">Choose a short location name, such as Home or Office.</p>' +
     '<p class="note">The API key stays on your phone and is never sent to the watch.</p>' +
     '<button type="submit">Save and refresh</button></form><script>var saved=' + JSON.stringify(settings.apiCredential || '') + ';' +
     'document.getElementById("form").onsubmit=function(e){e.preventDefault();var key=document.getElementById("key").value||saved;' +

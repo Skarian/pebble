@@ -73,13 +73,13 @@ static void format_metric(char *buffer, size_t size, int metric, uint16_t value)
 }
 
 static void format_age(char *buffer, size_t size) {
-  if (!s_cache.fetched_at) { snprintf(buffer, size, "SAVED DATA"); return; }
+  if (!s_cache.fetched_at) { snprintf(buffer, size, "Updated --"); return; }
   time_t now = time(NULL);
   uint32_t age = now > (time_t)s_cache.fetched_at ? (uint32_t)(now - s_cache.fetched_at) : 0;
-  if (age < 60) snprintf(buffer, size, "UPDATED NOW");
-  else if (age < 3600) snprintf(buffer, size, "UPDATED %lum AGO", (unsigned long)(age / 60));
-  else if (age < 86400) snprintf(buffer, size, "UPDATED %luh AGO", (unsigned long)(age / 3600));
-  else snprintf(buffer, size, "UPDATED %lud AGO", (unsigned long)(age / 86400));
+  if (age < 60) snprintf(buffer, size, "Updated just now");
+  else if (age < 3600) snprintf(buffer, size, "Updated %lum ago", (unsigned long)(age / 60));
+  else if (age < 86400) snprintf(buffer, size, "Updated %luh ago", (unsigned long)(age / 3600));
+  else snprintf(buffer, size, "Updated %lud ago", (unsigned long)(age / 86400));
 }
 
 static void draw_header(GContext *ctx, GRect bounds, const char *title) {
@@ -96,8 +96,8 @@ static void draw_footer(GContext *ctx, GRect bounds) {
   if (s_loading) snprintf(footer, sizeof(footer), "SYNCING...");
   else if (s_status >= STATUS_AUTH && s_status <= STATUS_SERVICE)
     snprintf(footer, sizeof(footer), "ERROR  PRESS SELECT TO RETRY");
-  else if (s_status == STATUS_PARTIAL) snprintf(footer, sizeof(footer), "PARTIAL  %s", age);
-  else if (s_cache.flags & FLAG_STALE) snprintf(footer, sizeof(footer), "STALE  %s", age);
+  else if (s_status == STATUS_PARTIAL) snprintf(footer, sizeof(footer), "Partial - %s", age);
+  else if (s_cache.flags & FLAG_STALE) snprintf(footer, sizeof(footer), "Stale - %s", age);
   else snprintf(footer, sizeof(footer), "%s", age);
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_draw_line(ctx, GPoint(8, bounds.size.h - 19), GPoint(bounds.size.w - 8, bounds.size.h - 19));
@@ -128,21 +128,19 @@ static void draw_state(GContext *ctx, GRect bounds) {
 static void draw_current(GContext *ctx, GRect bounds) {
   char value[28];
   char primary[16];
-  draw_header(ctx, bounds, "AIR QUALITY");
-  draw_text(ctx, s_cache.location, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 31, bounds.size.w - 16, 24), GTextAlignmentCenter, GColorBlack);
+  draw_header(ctx, bounds, s_cache.location);
   if (s_cache.current[0] == UNAVAILABLE) snprintf(primary, sizeof(primary), "--");
   else snprintf(primary, sizeof(primary), "%u", s_cache.current[0]);
-  draw_text(ctx, "AQI", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 53, 55, 22), GTextAlignmentCenter, GColorBlack);
-  draw_text(ctx, primary, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
-            GRect(4, 60, 96, 50), GTextAlignmentCenter, GColorBlack);
   draw_text(ctx, category(s_cache.current[0]), fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(96, 61, bounds.size.w - 102, 48), GTextAlignmentCenter, GColorBlack);
+            GRect(8, 42, 112, 30), GTextAlignmentLeft, GColorBlack);
+  draw_text(ctx, "AQI", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(8, 69, 42, 22), GTextAlignmentLeft, GColorBlack);
+  draw_text(ctx, primary, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
+            GRect(118, 39, bounds.size.w - 126, 54), GTextAlignmentRight, GColorBlack);
   graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(8, 109), GPoint(bounds.size.w - 8, 109));
+  graphics_draw_line(ctx, GPoint(8, 96), GPoint(bounds.size.w - 8, 96));
   for (int metric = 1; metric < METRICS; metric++) {
-    int y = 110 + (metric - 1) * 23;
+    int y = 97 + (metric - 1) * 25;
     draw_text(ctx, METRIC_NAMES[metric], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
               GRect(8, y, 72, 28), GTextAlignmentLeft, GColorBlack);
     format_metric(value, sizeof(value), metric, s_cache.current[metric]);

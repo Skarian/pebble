@@ -33,6 +33,14 @@ test('typography follows CPAP large system-font hierarchy', () => {
   assert.match(watch, /footer, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
 });
 
+test('current page uses the chosen location header and CPAP update wording', () => {
+  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location\)/);
+  assert.doesNotMatch(watch, /draw_header\(ctx, bounds, "AIR QUALITY"\);[\s\S]{0,500}s_cache\.location/);
+  assert.match(watch, /Updated just now/);
+  assert.match(watch, /Updated %lum ago/);
+  assert.match(watch, /Updated %lud ago/);
+});
+
 test('secrets remain phone-only and production has no QA or loopback route', () => {
   assert.match(phone, /airquality\.settings\.v1/);
   assert.match(phone, /API key stays on your phone/);

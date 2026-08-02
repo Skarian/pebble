@@ -134,7 +134,7 @@ function snapshot(aqi, options = {}) {
     temperature: base.temperature - index * 0.2, humidity: base.humidity + index * 0.4}));
   if (options.missingMetric) { delete base.co2; daily.forEach((row) => delete row.co2); }
   if (options.missingHistory) daily.splice(0, 7);
-  return {location: 'OFFICE', current: base, daily, stale: Boolean(options.stale)};
+  return {location: 'HOME', current: base, daily, stale: Boolean(options.stale)};
 }
 
 async function liveSnapshot(env) {
