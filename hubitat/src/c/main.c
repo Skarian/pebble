@@ -188,9 +188,9 @@ static const char *desired_action(const DeviceState *device) {
   return "";
 }
 
-static const char *action_label(const char *action, bool switch_action) {
-  if (strcmp(action, "on") == 0) return switch_action ? "TURN ON" : "ON";
-  if (strcmp(action, "off") == 0) return switch_action ? "TURN OFF" : "OFF";
+static const char *action_label(const char *action) {
+  if (strcmp(action, "on") == 0) return "ON";
+  if (strcmp(action, "off") == 0) return "OFF";
   if (strcmp(action, "lock") == 0) return "LOCK";
   if (strcmp(action, "unlock") == 0) return "UNLOCK";
   return "UNAVAILABLE";
@@ -247,6 +247,33 @@ static void set_text(const char *page, const char *label, const char *primary,
   text_layer_set_text(s_footer_layer, footer);
 }
 
+static void configure_data_layout(void) {
+  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 36, 184, 34));
+  text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
+  text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 70, 184, 52));
+  text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeTrailingEllipsis);
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 124, 184, 30));
+  text_layer_set_font(s_secondary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 158, 184, 34));
+  text_layer_set_font(s_meta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 204, 186, 22));
+}
+
+static void configure_state_layout(bool title_only) {
+  layer_set_frame(text_layer_get_layer(s_label_layer),
+                  GRect(8, title_only ? 92 : 68, 184, 36));
+  text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
+  text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(14, 108, 172, 58));
+  text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeWordWrap);
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 150, 184, 1));
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 152, 184, 1));
+  layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(8, 184, 184, 28));
+}
+
 static void format_age(char *buffer, size_t size) {
   uint32_t now = time(NULL);
   uint32_t age = now >= s_header.fetched_at ? now - s_header.fetched_at : 0;
@@ -258,18 +285,19 @@ static void format_age(char *buffer, size_t size) {
 }
 
 static void render_state(const char *title, const char *body, const char *footer) {
+  configure_state_layout(body[0] == '\0');
   set_text("", title, body, "", "", footer);
 }
 
 static void render(void) {
   if (!s_window) return;
-  static char page[18], primary[32], secondary[32], meta[32], footer[32];
+  static char primary[32], secondary[32], meta[32], footer[32];
   if (s_loading && s_status != STATUS_COMMAND_PENDING) {
-    render_state("", "SYNCING...", "");
+    render_state("SYNCING...", "", "");
     return;
   }
   if (s_status == STATUS_COMMAND_PENDING) {
-    render_state("", "WORKING...", "");
+    render_state("WORKING...", "", "");
     return;
   }
   if (s_status == STATUS_COMMAND_SUCCESS) {
@@ -295,21 +323,19 @@ static void render(void) {
     return;
   }
 
-  snprintf(page, sizeof(page), "%u / %u", s_page_index + 1, page_count());
+  configure_data_layout();
   if (s_page_index == 0) {
-    uint8_t sensors = 0, controls = 0, low = 0;
+    uint8_t sensors = 0, controls = 0;
     for (uint8_t i = 0; i < s_header.count; i++) {
       if (s_devices[i].kind >= KIND_MOTION && s_devices[i].kind <= KIND_TEMPERATURE) sensors += 1;
       if (device_has_control(&s_devices[i])) controls += 1;
-      if (s_devices[i].battery != 255 && s_devices[i].battery < 25) low += 1;
     }
-    snprintf(primary, sizeof(primary), "%u DEVICES", s_header.count);
-    snprintf(secondary, sizeof(secondary), "%u sensors  %u controls", sensors, controls);
+    snprintf(primary, sizeof(primary), "%u", s_header.count);
+    snprintf(secondary, sizeof(secondary), "DEVICES");
     if (s_header.partial) snprintf(meta, sizeof(meta), "PARTIAL DATA");
-    else if (low) snprintf(meta, sizeof(meta), "%u LOW BATTERY", low);
-    else meta[0] = '\0';
+    else snprintf(meta, sizeof(meta), "%u SENSORS / %u CONTROLS", sensors, controls);
     format_age(footer, sizeof(footer));
-    set_text(page, "OVERVIEW", primary, secondary, meta, footer);
+    set_text("HOME", "", primary, secondary, meta, footer);
     return;
   }
 
@@ -319,23 +345,23 @@ static void render(void) {
   if (page_type == PAGE_STATUS) {
     snprintf(meta, sizeof(meta), "%s", device->secondary);
     snprintf(footer, sizeof(footer), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
-    set_text(page, device->kind <= KIND_TEMPERATURE ? "SENSOR" : "DEVICE", device->label,
-             device->primary[0] ? device->primary : "MISSING", meta, footer);
+    set_text(device->kind <= KIND_TEMPERATURE ? "SENSOR" : "DEVICE", device->label,
+             device->primary[0] ? device->primary : "MISSING", meta, "", footer);
   } else if (page_type == PAGE_DETAIL) {
     snprintf(secondary, sizeof(secondary), "%s", kind_name(device->kind));
     if (device->battery == 255) snprintf(meta, sizeof(meta), "BATTERY --");
     else snprintf(meta, sizeof(meta), "BATTERY %u%%", device->battery);
     format_age(footer, sizeof(footer));
-    set_text(page, "DETAIL", device->label, secondary, meta, footer);
+    set_text("DETAIL", device->label, secondary, meta, "", footer);
   } else {
     const char *action = desired_action(device);
-    snprintf(secondary, sizeof(secondary), "%s", action_label(action, device->kind == KIND_SWITCH));
+    snprintf(secondary, sizeof(secondary), "%s", action_label(action));
     if (device->kind == KIND_LOCK && s_confirming) {
-      set_text(page, "CONFIRM", device->label, secondary, "", "PRESS SELECT AGAIN");
+      set_text("CONFIRM", device->label, secondary, "", "", "PRESS SELECT AGAIN");
     } else if (device->kind == KIND_LOCK) {
-      set_text(page, "CONTROL", device->label, secondary, "", "PRESS SELECT");
+      set_text("ACTION", device->label, secondary, "", "", "PRESS SELECT");
     } else {
-      set_text(page, "CONTROL", device->label, secondary, "", "PRESS SELECT");
+      set_text("ACTION", device->label, secondary, "", "", "PRESS SELECT");
     }
   }
 }
@@ -496,8 +522,8 @@ static void window_load(Window *window) {
   s_rules_layer = layer_create(bounds);
   layer_set_update_proc(s_rules_layer, rules_update_proc);
   layer_add_child(root, s_rules_layer);
-  s_brand_layer = make_text(root, GRect(7, 0, 110, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
-  s_page_layer = make_text(root, GRect(118, 2, bounds.size.w - 125, 24), FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentRight);
+  s_brand_layer = make_text(root, GRect(7, 0, 100, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+  s_page_layer = make_text(root, GRect(106, 0, bounds.size.w - 113, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
   s_label_layer = make_text(root, GRect(8, 36, bounds.size.w - 16, 32), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
   s_primary_layer = make_text(root, GRect(8, 66, bounds.size.w - 16, 54), FONT_KEY_GOTHIC_28_BOLD, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeWordWrap);
