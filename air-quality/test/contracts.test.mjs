@@ -39,6 +39,7 @@ test('headers and update footer follow the plain CPAP layout', () => {
   assert.doesNotMatch(watch, /graphics_fill_rect\(ctx, GRect\(0, 0, bounds\.size\.w, 30\)/);
   assert.doesNotMatch(watch, /bounds\.size\.h - 19/);
   assert.doesNotMatch(watch, /Partial - %s/);
+  assert.doesNotMatch(watch, /Stale - %s/);
   assert.match(watch, /Updated just now/);
   assert.match(watch, /Updated %lum ago/);
   assert.match(watch, /Updated %lud ago/);
@@ -50,6 +51,7 @@ test('current AQI uses one label and native watch-safe faces', () => {
   assert.match(watch, /aqi <= 50 \? 1 : aqi <= 100 \? 2 : aqi <= 150 \? 3/);
   assert.match(watch, /aqi <= 200 \? 4 : aqi <= 300 \? 5 : 6/);
   assert.match(watch, /if \(band == 6\)/);
+  assert.match(watch, /if \(band == 5\)[\s\S]{0,180}GPoint\(20, 49\)/);
   assert.match(watch, /const GPoint center = GPoint\(33, 60\)/);
   assert.match(watch, /graphics_draw_arc/);
   assert.doesNotMatch(watch, /"HEALTHY"|"MODERATE"|"ELEVATED"|"UNHEALTHY"|"HAZARDOUS"/);

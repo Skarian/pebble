@@ -72,6 +72,10 @@ static void draw_face(GContext *ctx, uint16_t aqi) {
   } else {
     graphics_fill_circle(ctx, GPoint(25, 53), 2);
     graphics_fill_circle(ctx, GPoint(41, 53), 2);
+    if (band == 5) {
+      graphics_draw_line(ctx, GPoint(20, 49), GPoint(28, 46));
+      graphics_draw_line(ctx, GPoint(38, 46), GPoint(46, 49));
+    }
   }
   if (band == 1) {
     graphics_draw_arc(ctx, GRect(23, 56, 20, 20), GOvalScaleModeFitCircle,
@@ -128,8 +132,6 @@ static void draw_footer(GContext *ctx, GRect bounds) {
   if (s_loading) snprintf(footer, sizeof(footer), "SYNCING...");
   else if (s_status >= STATUS_AUTH && s_status <= STATUS_SERVICE)
     snprintf(footer, sizeof(footer), "ERROR  PRESS SELECT TO RETRY");
-  else if (s_status == STATUS_PARTIAL) snprintf(footer, sizeof(footer), "%s", age);
-  else if (s_cache.flags & FLAG_STALE) snprintf(footer, sizeof(footer), "Stale - %s", age);
   else snprintf(footer, sizeof(footer), "%s", age);
   draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_14),
             GRect(5, bounds.size.h - 18, bounds.size.w - 10, 18), GTextAlignmentCenter, GColorBlack);
