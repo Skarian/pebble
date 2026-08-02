@@ -22,6 +22,9 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /persist_cache\(\);\n      s_status = STATUS_OK/);
   assert.match(watch, /SELECT: TURN OFF/);
   assert.match(watch, /KIND_LOCK && !s_confirming/);
+  assert.match(watch, /primary\[0\] = secondary\[0\] = meta\[0\] = footer\[0\] = '\\0'/);
+  assert.match(watch, /configure_data_layout\(has_battery, false, true\)/);
+  assert.doesNotMatch(watch, /BATTERY --/);
 });
 
 test('phone owns the one secret and permits controls only after an authorized refresh', () => {

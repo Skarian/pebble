@@ -13,8 +13,9 @@ unlock authorized locks. This build is configured for Neil's Maker API instance.
   fails, press **Select** to retry or **Up/Down** to return to the list.
 
 Each device or sensor has one screen. It keeps the current state in focus and
-shows battery, temperature, or humidity only when useful. There are no separate
-Detail or Action pages.
+shows battery, temperature, or humidity only when useful. Devices without a
+battery reading omit that row so the remaining content stays centered. There
+are no separate Detail or Action pages.
 
 The watch saves the last successful update. Reopening uses that saved data
 without contacting Hubitat. If no saved data exists, the app refreshes once.

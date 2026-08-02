@@ -271,6 +271,7 @@ static void render_state(const char *title, const char *body, const char *footer
 static void render(void) {
   if (!s_window) return;
   static char primary[32], secondary[32], meta[32], footer[32];
+  primary[0] = secondary[0] = meta[0] = footer[0] = '\0';
   if (s_loading && s_status != STATUS_COMMAND_PENDING) {
     render_state("SYNCING...", "", "");
     return;
@@ -324,14 +325,16 @@ static void render(void) {
     configure_data_layout(false, false, true);
     set_text("CONFIRM", device->label, action_label(action), "", "", "PRESS SELECT AGAIN");
   } else if (device_has_control(device)) {
-    snprintf(meta, sizeof(meta), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
-    configure_data_layout(true, false, true);
+    bool has_battery = device->battery != 255;
+    if (has_battery) snprintf(meta, sizeof(meta), "BATTERY %u%%", device->battery);
+    configure_data_layout(has_battery, false, true);
     set_text("DEVICE", device->label, device->primary[0] ? device->primary : "MISSING",
              meta, "", action_instruction(action));
   } else {
+    bool has_battery = device->battery != 255;
     snprintf(meta, sizeof(meta), "%s", device->secondary);
-    snprintf(footer, sizeof(footer), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
-    configure_data_layout(meta[0] != '\0', false, true);
+    if (has_battery) snprintf(footer, sizeof(footer), "BATTERY %u%%", device->battery);
+    configure_data_layout(meta[0] != '\0', false, has_battery);
     set_text(device->kind <= KIND_TEMPERATURE ? "SENSOR" : "DEVICE", device->label,
              device->primary[0] ? device->primary : "MISSING", meta, "", footer);
   }

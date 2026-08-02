@@ -12,8 +12,8 @@ export const fakeRawDevices = [
     attributes: {contact: 'open', battery: 67}, commands: []},
   {id: '103', label: 'Bedroom', capabilities: ['TemperatureSensor', 'Battery'],
     attributes: {temperature: 72.4, humidity: 41, battery: 94}, commands: []},
-  {id: '104', label: 'Desk Lamp', capabilities: ['Switch', 'Battery'],
-    attributes: {switch: 'on', battery: 100}, commands: [{command: 'on'}, {command: 'off'}]},
+  {id: '104', label: 'Desk Lamp', capabilities: ['Switch'],
+    attributes: {switch: 'on'}, commands: [{command: 'on'}, {command: 'off'}]},
   {id: '105', label: 'Front Lock', capabilities: ['Lock', 'Battery'],
     attributes: {lock: 'locked', battery: 19}, commands: [{command: 'lock'}, {command: 'unlock'}]}
 ];
