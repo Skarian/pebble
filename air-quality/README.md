@@ -4,9 +4,11 @@ AirQuality is an Emery/Pebble Time 2 watchapp for one Aranet Cloud sensor. It
 shows the current US AQI, PM2.5, CO2, temperature, and humidity, followed by a
 seven-day graph for each value.
 
-The current page uses a simple face for the AQI range: a smile for 0–50, a
-neutral face for 51–150, and a sad face above 150. The numeric AQI remains the
-primary value; the face is only a quick visual summary.
+The current page uses progressively less-happy faces for Aranet PM Sensor's six
+official US AQI bands: Good (0–50), Moderate (51–100), Unhealthy for Sensitive
+Groups (101–150), Unhealthy (151–200), Very Unhealthy (201–300), and Hazardous
+(301+). The numeric AQI remains the primary value; the face is only a quick
+visual summary.
 
 - Open the app to show the last saved reading and refresh it.
 - Press **Down** or **Up** to move through the current page and five graphs.
@@ -46,6 +48,7 @@ Official references:
 - [Aranet Cloud API help](https://help.aranet.com/aranet-cloud-page/aranet-cloud-landing-page/integrations-and-extensions/cloud-api)
 - [Aranet Cloud OpenAPI](https://aranet.cloud/openapi/)
 - [Aranet Cloud API terms](https://aranet.cloud/public-api-terms-and-conditions)
+- [Aranet PM Sensor AQI bands](https://assets.aranet.com/documents/Aranet_Datasheet_TDSPPM02_PM_sensor.pdf)
 - [EPA AQI breakpoints](https://aqs.epa.gov/aqsweb/documents/codetables/aqi_breakpoints.html)
 - [PebbleKit JS XMLHttpRequest](https://developer.rebble.io/guides/communication/using-pebblekit-js/)
 

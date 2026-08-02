@@ -52,23 +52,44 @@ static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
 
 static void draw_face(GContext *ctx, uint16_t aqi) {
   const GPoint center = GPoint(49, 65);
+  uint8_t band = aqi == UNAVAILABLE ? 3 :
+    aqi <= 50 ? 1 : aqi <= 100 ? 2 : aqi <= 150 ? 3 :
+    aqi <= 200 ? 4 : aqi <= 300 ? 5 : 6;
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_circle(ctx, center, 25);
-  graphics_fill_circle(ctx, GPoint(41, 58), 2);
-  graphics_fill_circle(ctx, GPoint(57, 58), 2);
-  if (aqi != UNAVAILABLE && aqi <= 50) {
+  if (band == 6) {
+    graphics_draw_line(ctx, GPoint(38, 55), GPoint(44, 61));
+    graphics_draw_line(ctx, GPoint(44, 55), GPoint(38, 61));
+    graphics_draw_line(ctx, GPoint(54, 55), GPoint(60, 61));
+    graphics_draw_line(ctx, GPoint(60, 55), GPoint(54, 61));
+  } else {
+    graphics_fill_circle(ctx, GPoint(41, 58), 2);
+    graphics_fill_circle(ctx, GPoint(57, 58), 2);
+  }
+  if (band == 1) {
     graphics_draw_line(ctx, GPoint(39, 67), GPoint(44, 72));
     graphics_draw_line(ctx, GPoint(44, 72), GPoint(49, 74));
     graphics_draw_line(ctx, GPoint(49, 74), GPoint(54, 72));
     graphics_draw_line(ctx, GPoint(54, 72), GPoint(59, 67));
-  } else if (aqi == UNAVAILABLE || aqi <= 150) {
+  } else if (band == 2) {
+    graphics_draw_line(ctx, GPoint(39, 68), GPoint(44, 71));
+    graphics_draw_line(ctx, GPoint(44, 71), GPoint(49, 72));
+    graphics_draw_line(ctx, GPoint(49, 72), GPoint(54, 71));
+    graphics_draw_line(ctx, GPoint(54, 71), GPoint(59, 68));
+  } else if (band == 3) {
     graphics_draw_line(ctx, GPoint(39, 70), GPoint(59, 70));
+  } else if (band == 4) {
+    graphics_draw_line(ctx, GPoint(39, 72), GPoint(44, 69));
+    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, 68));
+    graphics_draw_line(ctx, GPoint(49, 68), GPoint(54, 69));
+    graphics_draw_line(ctx, GPoint(54, 69), GPoint(59, 72));
   } else {
+    int center_y = band == 5 ? 67 : 65;
     graphics_draw_line(ctx, GPoint(39, 74), GPoint(44, 69));
-    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, 67));
-    graphics_draw_line(ctx, GPoint(49, 67), GPoint(54, 69));
+    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, center_y));
+    graphics_draw_line(ctx, GPoint(49, center_y), GPoint(54, 69));
     graphics_draw_line(ctx, GPoint(54, 69), GPoint(59, 74));
   }
   graphics_context_set_stroke_width(ctx, 1);
@@ -146,7 +167,7 @@ static void draw_current(GContext *ctx, GRect bounds) {
   else snprintf(primary, sizeof(primary), "%u", s_cache.current[0]);
   draw_face(ctx, s_cache.current[0]);
   draw_text(ctx, primary, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
-            GRect(118, 39, bounds.size.w - 126, 54), GTextAlignmentRight, GColorBlack);
+            GRect(100, 39, bounds.size.w - 108, 54), GTextAlignmentRight, GColorBlack);
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_draw_line(ctx, GPoint(8, 96), GPoint(bounds.size.w - 8, 96));
   for (int metric = 1; metric < METRICS; metric++) {

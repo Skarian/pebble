@@ -195,8 +195,11 @@ async function main() {
     await capture('NETWORK FAILURE', status(5, 'Phone network unavailable'));
     await capture('TIMEOUT', status(6, 'Aranet request timed out'));
     await capture('SERVICE FAILURE', status(7, 'Aranet Cloud unavailable'));
-    await capture('HEALTHY', encode(Model.dictionary(snapshot(34), Date.now(), 0)));
-    await capture('ELEVATED', encode(Model.dictionary(snapshot(128, {pm25: 46}), Date.now(), 0)));
+    await capture('GOOD', encode(Model.dictionary(snapshot(34), Date.now(), 0)));
+    await capture('MODERATE', encode(Model.dictionary(snapshot(72, {pm25: 22}), Date.now(), 0)));
+    await capture('SENSITIVE GROUPS', encode(Model.dictionary(snapshot(128, {pm25: 46}), Date.now(), 0)));
+    await capture('UNHEALTHY', encode(Model.dictionary(snapshot(175, {pm25: 70}), Date.now(), 0)));
+    await capture('VERY UNHEALTHY', encode(Model.dictionary(snapshot(250, {pm25: 120}), Date.now(), 0)));
     await capture('HAZARDOUS', encode(Model.dictionary(snapshot(322, {pm25: 235}), Date.now(), 0)));
     await capture('MISSING METRIC', encode(Model.dictionary(snapshot(58, {missingMetric: true}), Date.now(), 0)));
     await capture('STALE DATA', encode(Model.dictionary(snapshot(72, {stale: true, ageDays: 3}), Date.now() - 3 * 86400000, 0)));
