@@ -48,8 +48,8 @@ static uint8_t s_scale;
 static uint8_t s_pending_scale;
 static uint8_t s_request_command;
 
-static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESS"};
-static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESS"};
+static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESSURE"};
+static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESSURE"};
 static const char *SCALE_NAMES[] = {"1 HOUR", "1 DAY", "1 WEEK"};
 static const char *AXIS_LEFT[] = {"-1 HR", "-1 DAY", "-1 WEEK"};
 static const char *AXIS_MIDDLE[] = {"-30 MIN", "-12 HR", "-3 DAYS"};
@@ -119,10 +119,12 @@ static void format_age(char *buffer, size_t size) {
 }
 
 static void draw_header(GContext *ctx, GRect bounds, const char *left, const char *right) {
+  bool wide_right = strcmp(right, "PRESSURE") == 0;
+  int right_x = wide_right ? 100 : 122;
   draw_text(ctx, left, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 0, 118, 28), GTextAlignmentLeft, GColorBlack);
+            GRect(8, 0, wide_right ? 88 : 118, 28), GTextAlignmentLeft, GColorBlack);
   draw_text(ctx, right, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(122, 0, bounds.size.w - 130, 28), GTextAlignmentRight, GColorBlack);
+            GRect(right_x, 0, bounds.size.w - right_x - 8, 28), GTextAlignmentRight, GColorBlack);
 }
 
 static const char *short_error(void) {
@@ -191,11 +193,12 @@ static void draw_current(GContext *ctx, GRect bounds) {
   graphics_draw_line(ctx, GPoint(8, 99), GPoint(bounds.size.w - 8, 99));
   for (int metric = 1; metric < METRICS; metric++) {
     int y = 99 + (metric - 1) * 26;
+    int value_x = metric == 3 ? 104 : 78;
     draw_text(ctx, METRIC_NAMES[metric], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-              GRect(8, y, 76, 28), GTextAlignmentLeft, GColorBlack);
+              GRect(8, y, metric == 3 ? 96 : 76, 28), GTextAlignmentLeft, GColorBlack);
     format_metric(value, sizeof(value), metric, s_cache.current[metric]);
     draw_text(ctx, value, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-              GRect(78, y, bounds.size.w - 86, 28), GTextAlignmentRight, GColorBlack);
+              GRect(value_x, y, bounds.size.w - value_x - 8, 28), GTextAlignmentRight, GColorBlack);
   }
   snprintf(value, sizeof(value), s_cache.battery <= 100 ? "%u %%" : "--", s_cache.battery);
   draw_text(ctx, "BATT", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),

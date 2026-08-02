@@ -43,7 +43,10 @@ test('production routes through Android companion and bundles no PebbleKit JS', 
 test('Aranet4 metrics and services replace all cloud AQI assumptions', () => {
   assert.match(scanner, /MANUFACTURER_ID/);
   assert.match(protocol, /PRESSURE_X10 = 13/);
-  assert.match(watch, /\{"CO2", "TEMP", "RH", "PRESS"\}/);
+  assert.match(watch, /\{"CO2", "TEMP", "RH", "PRESSURE"\}/);
+  assert.match(watch, /\{"CO2", "TEMP", "HUMIDITY", "PRESSURE"\}/);
+  assert.match(watch, /strcmp\(right, "PRESSURE"\) == 0/);
+  assert.match(watch, /metric == 3 \? 104 : 78/);
   assert.doesNotMatch(watch + companion + protocol, /AQI|PM2\.5|apiCredential|ApiKey|aranet\.cloud/i);
 });
 
