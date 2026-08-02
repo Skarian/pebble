@@ -47,9 +47,13 @@ object SnapshotAggregator {
         scale: ChartScale = ChartScale.HOUR,
     ): AirSnapshot? {
         val current = readings.maxByOrNull { it.observedAtEpochSeconds } ?: return null
-        val windowStart = nowEpochSeconds - scale.windowSeconds
+        // End the graph at the newest real observation so a normal sensor delay
+        // does not create an empty strip before NOW. The footer still reports
+        // the observation's wall-clock age.
+        val windowEnd = minOf(nowEpochSeconds, current.observedAtEpochSeconds)
+        val windowStart = windowEnd - scale.windowSeconds
         val inWindow = readings.asSequence()
-            .filter { it.observedAtEpochSeconds in windowStart..nowEpochSeconds }
+            .filter { it.observedAtEpochSeconds in windowStart..windowEnd }
             .sortedBy { it.observedAtEpochSeconds }
             .toList()
         val columnTotals = Array(METRIC_COUNT) { LongArray(GRAPH_COLUMNS) }

@@ -67,6 +67,7 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
   assert.match(watch, /AXIS_LEFT\[\] = \{"-1 HR", "-1 DAY", "-1 WEEK"\}/);
   assert.match(watch, /AXIS_MIDDLE\[\] = \{"-30 MIN", "-12 HR", "-3 DAYS"\}/);
+  assert.match(watch, /draw_text\(ctx, "LAST"/);
   assert.doesNotMatch(watch, /if \(s_scale == SCALE_WEEK\)/);
   assert.match(watch, /GRAPH_COLUMNS 56/);
   assert.match(watch, /int16_t value = s_cache\.series/);
@@ -76,6 +77,8 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.doesNotMatch(watch, /high_y|low_y|last_y/);
   assert.match(watch, /left \+ \(4 \* \(right - left\)\) \/ 7/);
   assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);
+  assert.match(watch, /!connects_next/);
+  assert.match(watch, /GPoint\(tick_left, point\.y\), GPoint\(tick_right, point\.y\)/);
 });
 
 test('current state uses the three Aranet display states and concise stale copy', () => {

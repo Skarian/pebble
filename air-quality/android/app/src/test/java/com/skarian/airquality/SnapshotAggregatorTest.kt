@@ -25,8 +25,8 @@ class SnapshotAggregatorTest {
             listOf(reading(10, 600, -51), reading(20, 701, -52)),
             "HOME", 3_600, ChartScale.HOUR,
         )!!
-        assertEquals(651, snapshot.columns[0].metrics[0])
-        assertEquals(-51, snapshot.columns[0].metrics[1])
+        assertEquals(651, snapshot.columns.last().metrics[0])
+        assertEquals(-51, snapshot.columns.last().metrics[1])
     }
 
     @Test
@@ -46,6 +46,19 @@ class SnapshotAggregatorTest {
         assertEquals(800, week.averages[0])
         assertEquals(now - 3_600, hour.windowStartEpochSeconds)
         assertEquals(now - 604_800, week.windowStartEpochSeconds)
+    }
+
+    @Test
+    fun endsTheWindowAtTheNewestAvailableReading() {
+        val now = 10_000L
+        val newest = now - 5 * 60
+        val snapshot = SnapshotAggregator.build(
+            listOf(reading(newest - 5 * 60, 600), reading(newest, 800)),
+            "HOME", now, ChartScale.HOUR,
+        )!!
+        assertEquals(newest - 3_600, snapshot.windowStartEpochSeconds)
+        assertEquals(800, snapshot.columns.last().metrics[0])
+        assertEquals(700, snapshot.averages[0])
     }
 
     @Test

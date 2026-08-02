@@ -68,7 +68,10 @@ time columns, which is the useful horizontal resolution at Pebble size. Every
 stored reading in the selected hour, day, or week contributes to its column.
 Each column is the average of its readings, and a plain line joins those
 averages. The average below the chart is calculated from all readings in the
-window. The chart has no point or range markers.
+window. Each window ends at the newest available reading, so the sensor's
+normal reporting delay does not leave a misleading blank section before
+`LAST`; the update line still shows the reading's real age. An isolated average
+is shown as a short line. The chart has no point or range markers.
 
 The first import can take a few seconds. If the sensor does not offer saved
 history, new readings still build the charts normally. Tap **Refresh now** in

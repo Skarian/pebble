@@ -269,8 +269,18 @@ static void draw_chart(GContext *ctx, GRect bounds) {
     int x = left + (column * (right - left)) / (GRAPH_COLUMNS - 1);
     if (value != INT16_MIN) {
       GPoint point = GPoint(x, graph_y(value, minimum, maximum, top, bottom));
-      if (has_previous && column - previous_column <= connect_gap)
+      bool connects_previous = has_previous && column - previous_column <= connect_gap;
+      int next_column = column + 1;
+      while (next_column < GRAPH_COLUMNS && s_cache.series[metric][next_column] == INT16_MIN)
+        next_column++;
+      bool connects_next = next_column < GRAPH_COLUMNS && next_column - column <= connect_gap;
+      if (connects_previous) {
         graphics_draw_line(ctx, previous, point);
+      } else if (!connects_next) {
+        int tick_left = point.x > left + 2 ? point.x - 2 : left;
+        int tick_right = point.x < right - 2 ? point.x + 2 : right;
+        graphics_draw_line(ctx, GPoint(tick_left, point.y), GPoint(tick_right, point.y));
+      }
       previous = point;
       has_previous = true;
       previous_column = column;
@@ -286,7 +296,7 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   draw_text(ctx, AXIS_MIDDLE[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
             GRect(middle_x - 34, bottom + 1, 68, 22),
             GTextAlignmentCenter, GColorBlack);
-  draw_text(ctx, "NOW", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+  draw_text(ctx, "LAST", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
             GRect(right - 45, bottom + 1, 45, 22), GTextAlignmentRight, GColorBlack);
   if (s_cache.average[metric] != UNAVAILABLE) {
     char avg[24]; format_metric(avg, sizeof(avg), metric, s_cache.average[metric]);
