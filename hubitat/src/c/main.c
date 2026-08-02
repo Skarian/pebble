@@ -61,8 +61,10 @@ static bool s_has_cache;
 static bool s_staging_active;
 static bool s_loading;
 static bool s_confirming;
+static bool s_show_overview;
 static uint8_t s_status;
 static uint8_t s_page_index;
+static uint8_t s_command_device_index;
 static uint16_t s_request_id;
 static char s_error_text[48];
 static char s_action[10];
@@ -117,6 +119,14 @@ static uint8_t control_page_for(uint8_t device_index) {
   return page + PAGE_CONTROL;
 }
 
+static uint8_t status_page_for(uint8_t device_index) {
+  uint8_t page = 1;
+  for (uint8_t i = 0; i < device_index; i++) {
+    page += device_has_control(&s_devices[i]) ? 3 : 2;
+  }
+  return page;
+}
+
 static void persist_cache(void) {
   persist_write_data(PERSIST_HEADER_KEY, &s_header, sizeof(s_header));
   for (uint8_t i = 0; i < s_header.count; i++) {
@@ -142,7 +152,8 @@ static void show_failure(uint8_t status, const char *text) {
 
 static void response_timeout(void *context) {
   s_response_timer = NULL;
-  if (s_loading) show_failure(STATUS_TIMEOUT, "Phone response timed out");
+  if (s_loading) show_failure(s_status == STATUS_COMMAND_PENDING ? STATUS_COMMAND_FAILURE : STATUS_TIMEOUT,
+                              "Phone response timed out");
 }
 
 static void request_refresh(void) {
@@ -172,7 +183,7 @@ static const char *kind_name(uint8_t kind) {
     case KIND_TEMPERATURE: return "TEMPERATURE";
     case KIND_SWITCH: return "SWITCH";
     case KIND_LOCK: return "LOCK";
-    default: return "DEVICE";
+    default: return "SENSOR";
   }
 }
 
@@ -196,18 +207,11 @@ static const char *action_label(const char *action) {
   return "UNAVAILABLE";
 }
 
-static const char *result_label(const char *action) {
-  if (strcmp(action, "on") == 0) return "ON";
-  if (strcmp(action, "off") == 0) return "OFF";
-  if (strcmp(action, "lock") == 0) return "LOCKED";
-  if (strcmp(action, "unlock") == 0) return "UNLOCKED";
-  return "COMPLETE";
-}
-
 static void send_control(uint8_t device_index) {
   DeviceState *device = &s_devices[device_index];
   const char *action = desired_action(device);
   if (!action[0]) return;
+  s_command_device_index = device_index;
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK) {
     show_failure(STATUS_COMMAND_FAILURE, "Cannot contact phone");
@@ -231,10 +235,11 @@ static void send_control(uint8_t device_index) {
 }
 
 static void rules_update_proc(Layer *layer, GContext *ctx) {
+  if (!s_show_overview) return;
   GRect bounds = layer_get_bounds(layer);
   graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_line(ctx, GPoint(6, 29), GPoint(bounds.size.w - 7, 29));
-  graphics_draw_line(ctx, GPoint(6, bounds.size.h - 25), GPoint(bounds.size.w - 7, bounds.size.h - 25));
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_circle(ctx, GPoint(bounds.size.w / 2, 68), 47);
 }
 
 static void set_text(const char *page, const char *label, const char *primary,
@@ -248,20 +253,42 @@ static void set_text(const char *page, const char *label, const char *primary,
 }
 
 static void configure_data_layout(void) {
-  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 36, 184, 34));
+  s_show_overview = false;
+  layer_mark_dirty(s_rules_layer);
+  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 52, 184, 36));
   text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 70, 184, 52));
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 88, 184, 52));
   text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 124, 184, 30));
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 142, 184, 30));
   text_layer_set_font(s_secondary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 158, 184, 34));
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 174, 184, 26));
   text_layer_set_font(s_meta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 204, 186, 22));
+  text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+}
+
+static void configure_overview_layout(void) {
+  s_show_overview = true;
+  layer_mark_dirty(s_rules_layer);
+  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 30, 184, 24));
+  text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 48, 184, 54));
+  text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeTrailingEllipsis);
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 116, 184, 30));
+  text_layer_set_font(s_secondary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 146, 184, 30));
+  text_layer_set_font(s_meta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 210, 186, 18));
+  text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
 }
 
 static void configure_state_layout(bool title_only) {
+  s_show_overview = false;
+  layer_mark_dirty(s_rules_layer);
   layer_set_frame(text_layer_get_layer(s_label_layer),
                   GRect(8, title_only ? 92 : 68, 184, 36));
   text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
@@ -272,16 +299,6 @@ static void configure_state_layout(bool title_only) {
   layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 150, 184, 1));
   layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 152, 184, 1));
   layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(8, 184, 184, 28));
-}
-
-static void format_age(char *buffer, size_t size) {
-  uint32_t now = time(NULL);
-  uint32_t age = now >= s_header.fetched_at ? now - s_header.fetched_at : 0;
-  if (!s_header.fetched_at) snprintf(buffer, size, "UPDATED --");
-  else if (age < 60) snprintf(buffer, size, "UPDATED NOW");
-  else if (age < 3600) snprintf(buffer, size, "UPDATED %lum AGO", (unsigned long)(age / 60));
-  else if (age < 86400) snprintf(buffer, size, "%s %luh AGO", age >= 21600 ? "STALE" : "UPDATED", (unsigned long)(age / 3600));
-  else snprintf(buffer, size, "STALE %lud AGO", (unsigned long)(age / 86400));
 }
 
 static void render_state(const char *title, const char *body, const char *footer) {
@@ -300,12 +317,11 @@ static void render(void) {
     render_state("WORKING...", "", "");
     return;
   }
-  if (s_status == STATUS_COMMAND_SUCCESS) {
-    render_state("DONE", result_label(s_action), "UP / DOWN TO RETURN");
-    return;
-  }
   if (s_status == STATUS_COMMAND_FAILURE) {
-    render_state("ERROR", "Command failed", "UP / DOWN TO RETURN");
+    configure_data_layout();
+    DeviceState *device = &s_devices[s_command_device_index];
+    set_text("ERROR", device->label, action_label(s_action), "SELECT TO RETRY", "",
+             "UP / DOWN TO RETURN");
     return;
   }
   if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
@@ -323,22 +339,22 @@ static void render(void) {
     return;
   }
 
-  configure_data_layout();
   if (s_page_index == 0) {
+    configure_overview_layout();
     uint8_t sensors = 0, controls = 0;
     for (uint8_t i = 0; i < s_header.count; i++) {
-      if (s_devices[i].kind >= KIND_MOTION && s_devices[i].kind <= KIND_TEMPERATURE) sensors += 1;
+      if (s_devices[i].kind <= KIND_TEMPERATURE) sensors += 1;
       if (device_has_control(&s_devices[i])) controls += 1;
     }
     snprintf(primary, sizeof(primary), "%u", s_header.count);
-    snprintf(secondary, sizeof(secondary), "DEVICES");
+    snprintf(secondary, sizeof(secondary), "SENSORS %u", sensors);
     if (s_header.partial) snprintf(meta, sizeof(meta), "PARTIAL DATA");
-    else snprintf(meta, sizeof(meta), "%u SENSORS / %u CONTROLS", sensors, controls);
-    format_age(footer, sizeof(footer));
-    set_text("HOME", "", primary, secondary, meta, footer);
+    else snprintf(meta, sizeof(meta), "CONTROLS %u", controls);
+    set_text("HOME", "DEVICES", primary, secondary, meta, "UPDATED NOW");
     return;
   }
 
+  configure_data_layout();
   uint8_t device_index = 0, page_type = 0;
   if (!decode_page(s_page_index, &device_index, &page_type)) return;
   DeviceState *device = &s_devices[device_index];
@@ -351,8 +367,7 @@ static void render(void) {
     snprintf(secondary, sizeof(secondary), "%s", kind_name(device->kind));
     if (device->battery == 255) snprintf(meta, sizeof(meta), "BATTERY --");
     else snprintf(meta, sizeof(meta), "BATTERY %u%%", device->battery);
-    format_age(footer, sizeof(footer));
-    set_text("DETAIL", device->label, secondary, meta, "", footer);
+    set_text("DETAIL", device->label, secondary, meta, "", "");
   } else {
     const char *action = desired_action(device);
     snprintf(secondary, sizeof(secondary), "%s", action_label(action));
@@ -429,8 +444,20 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
   if (command == CMD_RESULT) {
     cancel_response_timer();
     s_loading = false;
-    s_status = status;
     copy_text(s_error_text, sizeof(s_error_text), error);
+    if (status == STATUS_COMMAND_SUCCESS && s_command_device_index < s_header.count) {
+      DeviceState *device = &s_devices[s_command_device_index];
+      if (strcmp(s_action, "on") == 0) snprintf(device->primary, sizeof(device->primary), "on");
+      else if (strcmp(s_action, "off") == 0) snprintf(device->primary, sizeof(device->primary), "off");
+      else if (strcmp(s_action, "lock") == 0) snprintf(device->primary, sizeof(device->primary), "locked");
+      else if (strcmp(s_action, "unlock") == 0) snprintf(device->primary, sizeof(device->primary), "unlocked");
+      persist_cache();
+      s_status = STATUS_OK;
+      s_page_index = status_page_for(s_command_device_index);
+    } else {
+      s_status = STATUS_COMMAND_FAILURE;
+      s_page_index = control_page_for(s_command_device_index);
+    }
     render();
     return;
   }
@@ -479,6 +506,7 @@ static void down_click(ClickRecognizerRef recognizer, void *context) {
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
   if (s_loading) return;
+  if (s_status == STATUS_COMMAND_FAILURE) { send_control(s_command_device_index); return; }
   if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) { request_refresh(); return; }
   if (s_page_index == 0) { request_refresh(); return; }
   uint8_t device_index = 0, page_type = 0;
@@ -541,10 +569,6 @@ static void window_unload(Window *window) {
   text_layer_destroy(s_footer_layer); layer_destroy(s_rules_layer);
 }
 
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-  if (s_has_cache && !s_loading) render();
-}
-
 static void load_cache(void) {
   if (!persist_exists(PERSIST_HEADER_KEY) ||
       persist_get_size(PERSIST_HEADER_KEY) != (int)sizeof(CacheHeader) ||
@@ -570,14 +594,12 @@ static void init(void) {
   app_message_register_inbox_dropped(inbox_dropped);
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(1024, 256);
-  tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   window_stack_push(s_window, true);
   if (!s_has_cache) request_refresh();
 }
 
 static void deinit(void) {
   cancel_response_timer();
-  tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
   window_destroy(s_window);
 }

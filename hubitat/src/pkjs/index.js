@@ -131,7 +131,7 @@ function settingsPage(settings) {
     '<label for="token">Access token</label><input id="token" type="password" ' + (hasToken ? 'placeholder="Saved — leave blank to keep"' : 'required') + '>' +
     '<label for="ids">Device IDs</label><input id="ids" required placeholder="12, 34, 56" value="' + selected + '">' +
     '<p class="note">Copy the numeric IDs from Maker API’s device list.</p>' +
-    '<button type="submit">Save and refresh</button></form><h2>Diagnostics</h2><p class="note">Sanitized failures contain no URL, token, device ID, or device value.</p>' +
+    '<button type="submit">Save</button></form><p class="note">After saving, press Select on the watch to sync.</p><h2>Diagnostics</h2><p class="note">Sanitized failures contain no URL, token, device ID, or device value.</p>' +
     '<textarea readonly style="box-sizing:border-box;width:100%;height:130px">' + escapeHtml(diagnostics.report()) + '</textarea><a class="cancel" href="pebblejs://close">Cancel</a>' +
     '<script>document.getElementById("form").onsubmit=function(e){e.preventDefault();var v={baseUrl:document.getElementById("url").value,' +
     'token:document.getElementById("token").value,deviceIds:document.getElementById("ids").value.split(",").map(function(x){return x.trim()}).filter(Boolean)};' +
@@ -165,7 +165,6 @@ Pebble.addEventListener('webviewclosed', function (event) {
     }
     MakerClient.validateSettings(values);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(values));
-    refresh(1);
   } catch (error) {
     sendStatus(STATUS.SETUP, 0, error.message || 'Settings were not saved');
   }

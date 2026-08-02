@@ -244,7 +244,8 @@ export async function main() {
 
     const fakeRawDevices = matrix.devices;
     await inject(session, scratch, snapshotMessages(fakeRawDevices), 'full');
-    captured.push(await captureState(outputDir, session, 'overview', 'OVERVIEW'));
+    const overview = await captureState(outputDir, session, 'overview', 'OVERVIEW');
+    captured.push(overview);
     captured.push(await captureState(outputDir, session, 'motion', 'MOTION SENSOR', ['down']));
     captured.push(await captureState(outputDir, session, 'contact', 'CONTACT SENSOR', ['down', 'down']));
     captured.push(await captureState(outputDir, session, 'temperature', 'TEMPERATURE SENSOR', ['down', 'down']));
@@ -255,11 +256,11 @@ export async function main() {
     captured.push(await captureState(outputDir, session, 'lock-control', 'LOCK CONTROL', ['down']));
     captured.push(await captureState(outputDir, session, 'lock-confirm', 'LOCK CONFIRMATION', ['select']));
     captured.push(await captureState(outputDir, session, 'command-pending', 'COMMAND PENDING', ['select']));
-    captured.push(await captureState(outputDir, session, 'command-success', 'COMMAND SUCCESS', [],
+    captured.push(await captureState(outputDir, session, 'command-success', 'SUCCESS - DEVICE UPDATED', [],
       commandResult(matrix.command.success.status, matrix.command.success.text, 2)));
 
-    await session.capture(join(scratch, 'return-from-success.png'), ['up', 'down', 'select', 'select']);
-    captured.push(await captureState(outputDir, session, 'command-failure', 'COMMAND FAILURE', [],
+    await session.capture(join(scratch, 'next-command.png'), ['select', 'select', 'select']);
+    captured.push(await captureState(outputDir, session, 'command-failure', 'FAILURE - SELECT RETRIES', [],
       commandResult(matrix.command.failure.status, matrix.command.failure.text, 3)));
 
     const missing = fakeRawDevices.map((device) => ({...device, attributes: {...device.attributes}}));
@@ -270,8 +271,12 @@ export async function main() {
 
     await inject(session, scratch, snapshotMessages(fakeRawDevices, {
       requestId: 3, fetchedAt: Math.floor(Date.now() / 1000) - 2 * 86400
-    }), 'stale');
-    captured.push(await captureState(outputDir, session, 'stale', 'STALE LAST-GOOD DATA'));
+    }), 'old-timestamp');
+    const oldTimestampPath = join(scratch, 'old-timestamp.png');
+    await session.capture(oldTimestampPath);
+    if (!readFileSync(oldTimestampPath).equals(readFileSync(overview.path))) {
+      throw new Error('An old timestamp must render exactly like the normal overview');
+    }
     captured.push(await captureState(outputDir, session, 'cached-network', 'PHONE UNREACHABLE - CACHED', [],
       statusMessage(3, 'Phone cannot reach Hubitat', 3)));
     captured.push(await captureState(outputDir, session, 'cached-loading', 'SYNCING - CACHED', [],

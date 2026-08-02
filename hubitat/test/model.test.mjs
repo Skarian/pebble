@@ -25,3 +25,13 @@ test('selection is bounded and missing values remain explicit', () => {
   assert.equal(values[0].primary, 'no state');
   assert.equal(values[0].battery, 255);
 });
+
+test('generic safety sensors prefer their useful state over battery telemetry', () => {
+  const values = Model.normalizeDevices([
+    {id: '3', label: 'Smoke', attributes: {battery: 100, smoke: 'clear', carbonMonoxide: 'clear'}},
+    {id: '4', label: 'Moisture', attributes: {battery: 100, water: 'dry'}}
+  ], []);
+  assert.deepEqual(values.map((value) => [value.primary, value.battery]), [
+    ['clear', 100], ['dry', 100]
+  ]);
+});

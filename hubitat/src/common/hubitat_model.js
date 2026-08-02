@@ -48,7 +48,13 @@ function primaryFor(kind, attrs) {
   if (kind === 'lock') return text(attrs.lock, 'missing');
   if (kind === 'switch') return text(attrs.switch, 'missing');
   if (kind === 'temperature') return attrs.temperature === undefined ? 'missing' : text(attrs.temperature) + '°';
-  var keys = Object.keys(attrs);
+  var preferred = ['smoke', 'carbonMonoxide', 'water', 'presence', 'acceleration', 'valve', 'alarm', 'level'];
+  for (var index = 0; index < preferred.length; index += 1) {
+    if (attrs[preferred[index]] !== undefined) return text(attrs[preferred[index]], 'missing');
+  }
+  var keys = Object.keys(attrs).filter(function (key) {
+    return ['battery', 'temperature', 'humidity', 'illuminance', 'power', 'energy', 'voltage', 'current'].indexOf(key) === -1;
+  });
   return keys.length ? text(attrs[keys[0]], 'unknown') : 'no state';
 }
 

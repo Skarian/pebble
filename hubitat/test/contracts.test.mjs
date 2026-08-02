@@ -13,16 +13,25 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /s_page_index \+ 1 < page_count\(\)/);
   assert.match(watch, /RESPONSE_TIMEOUT_MS 30000/);
   assert.match(watch, /if \(!s_has_cache\) request_refresh\(\)/);
+  assert.match(watch, /if \(s_page_index == 0\) \{ request_refresh\(\); return; \}/);
+  assert.doesNotMatch(watch, /tick_timer_service_subscribe|STALE/);
+  assert.match(watch, /set_text\("HOME", "DEVICES", primary, secondary, meta, "UPDATED NOW"\)/);
+  assert.match(watch, /s_page_index = status_page_for\(s_command_device_index\)/);
+  assert.match(watch, /persist_cache\(\);\n      s_status = STATUS_OK/);
 });
 
 test('phone owns secrets and permits only selected-device control actions', () => {
   assert.match(phone, /localStorage\.setItem\(SETTINGS_KEY/);
   assert.match(phone, /Device is not selected/);
   assert.doesNotMatch(watch, /access_token|baseUrl|token/);
+  assert.match(phone, /After saving, press Select on the watch to sync/);
+  assert.doesNotMatch(phone, /Save and refresh|localStorage\.setItem\(SETTINGS_KEY[^}]+refresh\(1\)/s);
 });
 
 test('QA owns the shared emulator lock and never issues global emulator kills', () => {
   assert.match(qa, /\/private\/tmp\/pebble-emulator-qa\.lock/);
   assert.match(qa, /HUBITAT_QA_PORT \|\| 8896/);
   assert.doesNotMatch(qa, /pebble[^\n]*kill|stopEmulators/);
+  assert.match(qa, /old timestamp must render exactly like the normal overview/i);
+  assert.doesNotMatch(qa, /STALE LAST-GOOD DATA/);
 });

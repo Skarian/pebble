@@ -9,6 +9,8 @@ unlock selected locks.
 - Press **Select** on Overview to refresh.
 - Press **Select** on a controllable device to open its Control page.
 - Lock controls ask for a second Select press before sending the command.
+- A successful command returns to that device with its new value. If a command
+  fails, press **Select** to retry or **Up/Down** to return to the list.
 
 Each screen keeps one device, value, or action in focus. Battery, temperature,
 or humidity appears only when that device reports it.
@@ -16,7 +18,8 @@ or humidity appears only when that device reports it.
 The watch saves the last successful update. Reopening uses that saved data
 without contacting Hubitat. If no saved data exists, the app refreshes once.
 During a refresh it shows `SYNCING...`; errors never replace the saved data.
-Updates older than six hours are marked `STALE`.
+There is no scheduled refresh. `UPDATED NOW` appears only on Overview after
+data is received; press **Select** there whenever you want a new reading.
 
 ## Configure Maker API
 
@@ -38,6 +41,9 @@ In the Pebble mobile app, open Hubitat **Settings** and enter:
 - **Access token**: the token displayed by that same Maker API instance.
 - **Device IDs**: up to six comma-separated numeric IDs, such as
   `17, 42, 108`. Every ID must be authorized in that Maker API instance.
+
+Save Settings, return to the watch, and press **Select** to sync. Saving never
+starts a background read.
 
 The phone connects directly to Maker API; no companion app or production
 bridge is required. The URL, token, and selected IDs live in this app's private PebbleKit JS
@@ -75,8 +81,9 @@ fixtures, QA modes, scenario names, or test navigation.
 
 The board covers setup, loading with and without cache, overview, motion,
 contact, temperature, battery, switch, lock, detail, safe control, dangerous
-confirmation, empty selection, missing values, stale and partial data, auth,
-phone/network, timeout, service, and command pending/success/failure.
+confirmation, empty selection, missing and partial data, auth, phone/network,
+timeout, service, and command pending/success/failure. It also verifies that an
+old timestamp does not add a stale-data screen or change the Overview.
 
 Fake data is always the default and performs zero Maker API requests. The QA
 runner atomically waits for `/private/tmp/pebble-emulator-qa.lock` without a
