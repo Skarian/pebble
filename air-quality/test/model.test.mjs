@@ -4,24 +4,33 @@ import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
 const model = require('../src/common/air_quality_model');
 
-test('normalizes valid readings and rejects missing values', () => {
-  assert.deepEqual(model.normalize({aqi: 42, pm25: 8.25, co2: 612, temperature: 22.4, humidity: 47.2}),
-    {aqi: 42, pm25: 83, co2: 612, temperature: 224, humidity: 472});
-  assert.equal(model.normalize({}).pm25, model.UNAVAILABLE);
+test('normalizes the four real Aranet4 metrics', () => {
+  assert.deepEqual(model.normalize({co2: 612, temperature: 22.4, humidity: 47.2, pressure: 1008.6}),
+    {co2: 612, temperature: 224, humidity: 472, pressure: 10086});
+  assert.equal(model.normalize({}).pressure, model.UNAVAILABLE);
+  assert.equal(model.normalize({temperature: -5.2}).temperature, -52);
 });
 
 test('builds seven newest-to-oldest calendar slots', () => {
-  const slots = model.sevenDays([{date: '2026-08-01', aqi: 30}], new Date(2026, 7, 2, 12));
+  const slots = model.sevenDays([{date: '2026-08-01', co2: 700}], new Date(2026, 7, 2, 12));
   assert.equal(slots.length, 7);
   assert.equal(slots[0].date, 20260802);
   assert.equal(slots[1].date, 20260801);
-  assert.equal(slots[1].values.aqi, 30);
+  assert.equal(slots[1].values.co2, 700);
 });
 
-test('dictionary keeps canonical units and marks partial history', () => {
-  const message = model.dictionary({location: 'Office', current: {aqi: 44}}, Date.UTC(2026, 7, 2), 9);
+test('uses supplied Aranet state and default thresholds only as fallback', () => {
+  assert.equal(model.co2State(600, 3), 3);
+  assert.equal(model.co2State(600), 1);
+  assert.equal(model.co2State(1200), 2);
+  assert.equal(model.co2State(1600), 3);
+});
+
+test('dictionary marks incomplete history without adding provider credentials', () => {
+  const message = model.dictionary({location: 'Home', current: {co2: 612}}, Date.UTC(2026, 7, 2), 9);
   assert.equal(message.STATUS, 8);
-  assert.equal(message.LOCATION, 'Office');
+  assert.equal(message.LOCATION, 'Home');
   assert.equal(message.REQUEST_ID, 9);
-  assert.equal(message.AQI, 44);
+  assert.equal(message.CO2, 612);
+  assert.equal(message.DAY6_PRESSURE_X10, model.UNAVAILABLE);
 });

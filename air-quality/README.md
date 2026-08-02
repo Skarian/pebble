@@ -1,122 +1,131 @@
 # AirQuality for Pebble
 
-AirQuality is an Emery/Pebble Time 2 watchapp for one Aranet Cloud sensor. It
-shows the current US AQI, PM2.5, CO2, temperature, and humidity, followed by a
-seven-day graph for each value.
+AirQuality puts an Aranet4 HOME reading on Pebble. It shows CO2 first, with
+temperature, humidity, pressure, battery, and one seven-day chart for each air
+measurement.
 
-The current page uses progressively less-happy faces for Aranet PM Sensor's six
-official US AQI bands: Good (0–50), Moderate (51–100), Unhealthy for Sensitive
-Groups (101–150), Unhealthy (151–200), Very Unhealthy (201–300), and Hazardous
-(301+). The numeric AQI remains the primary value; the face is only a quick
-visual summary.
+- Open the watch app to refresh automatically.
+- Press **Select** to refresh again.
+- Press **Up** or **Down** to move through the current reading and four charts.
+  The list stops at either end.
 
-- Open the app to show the last saved reading and refresh it.
-- Press **Down** or **Up** to move through the current page and five graphs.
-  The list stops at each end.
-- Press **Select** to refresh.
-- Open AirQuality's **Settings** in the Pebble phone app to connect Aranet.
+The watch keeps the last good reading. Missing values appear as `--`, and the
+update line always says how old the visible reading is. AirQuality is for
+awareness only and does not give medical advice.
 
-The watch keeps the last good reading. While refreshing it shows `SYNCING...`.
-If a refresh fails, saved data stays visible with a short error footer. Missing
-values use a dash instead of zero. AirQuality describes readings but does not
-give medical advice.
+## What you need
 
-## Connect Aranet
+- An Aranet4 HOME with **Smart Home integrations** enabled in the Aranet Home
+  app.
+- An Android phone running the Pebble app.
+- The AirQuality Android companion and Pebble PBW from this project.
 
-In AirQuality Settings, enter:
+You do **not** need an Aranet base station, cloud account, API key, or location
+permission on modern Android. The companion reads the sensor's Bluetooth
+advertisements directly. Bluetooth stays on the phone; readings sent to the
+watch contain no credentials.
 
-1. **Aranet sensor ID**
-2. **Aranet API key**
-3. **Name on watch** — choose a short location name, such as Home or Office
+## Install and connect
 
-Press **Save and refresh**. The API key stays in this app on your phone and is
-never sent to the watch.
-
-Create the key in Aranet Cloud under **Settings → API → Create New**. Your
-account needs **Integrations Write** permission. The sensor must be connected to
-Aranet Cloud through an Aranet PRO/PRO+ base or gateway; Aranet4 Home/MINI by
-itself does not provide the Cloud API used here.
-
-The phone makes one direct seven-day Aranet request per refresh. There is no
-companion app or production bridge. Aranet does not publish a numeric rate
-limit, so the app does not poll automatically and handles a rate-limit response
-as a normal error. US AQI is calculated from PM2.5 with the current EPA
-breakpoints.
-
-Official references:
-
-- [Aranet Cloud API help](https://help.aranet.com/aranet-cloud-page/aranet-cloud-landing-page/integrations-and-extensions/cloud-api)
-- [Aranet Cloud OpenAPI](https://aranet.cloud/openapi/)
-- [Aranet Cloud API terms](https://aranet.cloud/public-api-terms-and-conditions)
-- [Aranet PM Sensor AQI bands](https://assets.aranet.com/documents/Aranet_Datasheet_TDSPPM02_PM_sensor.pdf)
-- [EPA AQI breakpoints](https://aqs.epa.gov/aqsweb/documents/codetables/aqi_breakpoints.html)
-- [PebbleKit JS XMLHttpRequest](https://developer.rebble.io/guides/communication/using-pebblekit-js/)
-
-## Build and test
+Build both apps:
 
 ```sh
 cd air-quality
 npm test
+npm run android:test
+npm run android:build
 pebble build
 ```
 
-The PBW is `build/air-quality.pbw`.
+Install the Android companion:
 
-## Review every screen with fake data
+```sh
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Then:
+
+1. Open **AirQuality Companion** on the phone.
+2. Allow **Nearby devices** and notifications.
+3. Tap **Choose sensor** and select your Aranet4.
+4. Set the short name shown on the watch, such as `HOME` or `OFFICE`.
+5. Keep the monitoring notification running.
+6. Install `build/air-quality.pbw`, then open **AirQuality** on Pebble.
+
+If the sensor appears without a reading, open Aranet Home and enable
+**Smart Home integrations**, then return and tap **Refresh now**.
+
+## How history works
+
+The companion saves readings locally while its monitoring notification is
+running. The charts fill over the first seven days and retain at most eight
+days. This first build does not import old records stored inside the Aranet4;
+adding that GATT history import is the next hardware-validated step.
+
+No data is uploaded and no bridge server is used. Removing the Android app
+removes its saved readings and selected sensor.
+
+## Review every Pebble screen
 
 ```sh
 cd air-quality
-AIRQUALITY_QA_SOURCE=fake npm run qa
+npm run qa:screenshots
 ```
 
-This one command tests and builds the production PBW, then creates a numbered
-`qa-results/.../all-states.png` board. It covers setup, syncing,
-healthy/elevated/hazardous readings, missing and stale data, every graph, and
-all refresh failures. Fake data comes from the QA script; the production app
-contains no fixtures, hidden navigation, localhost route, or QA mode.
+This fake-data command tests the contracts, builds the production PBW, and
+creates a numbered `qa-results/.../all-states.png` board. It covers setup,
+loading, companion and Bluetooth problems, permission, missing sensor, timeout,
+service failure, all three device CO2 states, missing metrics and history,
+old data, the current screen, and every chart.
 
-The left side of each header shows this user-chosen name; the right side shows
-the current statistic. `HOME` on the fake QA board is only an example and is
-not read from Aranet automatically.
+The fake states are injected from the repository QA runner. The production PBW
+contains no fixtures, QA navigation, local server, or test mode. The runner
+waits for `/private/tmp/pebble-emulator-qa.lock`, uses isolated emulator state,
+and releases both the emulator and lock on every exit.
 
-If Aranet omits one current reading, that row shows `--` while the other values
-remain visible. If its seven-day response omits readings, the matching graph
-shows gaps or `NO HISTORY`. The update line always describes the age of the
-usable data on screen; the watch does not use an unexplained "partial" label.
+## Design and behavior
 
-The watch UI follows CPAP's proven type hierarchy: a 42-point primary value,
-24-point bold metric rows and chart statistics, 28-point state titles, and
-18-point bold state copy and button instructions. Labels are shortened instead
-of shrinking their text.
+The screen hierarchy, short labels, monochrome spacing, large system fonts,
+bounded list, last-good cache, request IDs, stale-response rejection, and
+numbered QA board follow the working `cpap/` app. The Aranet adaptation removes
+cloud setup, AQI, polling modes, technical status prose, and extra metadata.
+There is one primary value or action per screen.
 
-The runner waits for `/private/tmp/pebble-emulator-qa.lock`, uses isolated Emery
-flash, stops only the QEMU process it started, restores the previous flash, and
-releases the lock on every exit.
+The device's own CO2 state drives the face instead of hard-coded thresholds,
+because Aranet lets users customize its CO2 limits. The standard defaults are
+Good below 1000 ppm, Average from 1000 through 1400 ppm, and Unhealthy above
+1400 ppm.
 
-## Optional live QA later
+## Architecture
 
-When Aranet developer access is ready, create ignored owner-only
-`air-quality/.env` with:
+- `src/c/main.c`: production Pebble UI, persistent cache, request ordering.
+- `android/`: direct Aranet4 BLE reader, local history, PebbleKit transport.
+- `src/common/air_quality_model.js`: repository QA state model only.
+- `scripts/qa.mjs`: deterministic screenshots and contact sheet.
 
-```text
-ARANET_API_KEY=...
-ARANET_SENSOR_ID=...
-ARANET_LOCATION=Office
-```
+PebbleKit JS is intentionally absent: Pebble does not support combining it with
+PebbleKit Android for the same watchapp. The Android companion uses
+`io.rebble.pebblekit2:client:1.2.0` and the watch communicates through
+AppMessage.
 
-Run `AIRQUALITY_QA_SOURCE=live npm run qa`. Live results are cached for 24 hours
-in ignored `data/qa-live-cache.json`. A normal rerun makes no Aranet request;
-`AIRQUALITY_QA_REFRESH_LIVE=1` makes at most one request in that run.
+The advertisement payload parser is a read-only adaptation of the
+MIT-licensed Aranet4-Python project. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Diagnostics and namespaces
+Useful primary references:
 
-The phone keeps the latest 12 failures as timestamp, error type, HTTP status,
-step, and replay code. Opening Settings reprints them with the
-`AIRQUALITY_DIAGNOSTIC` prefix. API keys, sensor IDs, locations, response bodies,
-and readings are never logged.
+- [Aranet4 measurements](https://help.aranet.com/aranet4/aranet4-home/general/what-does-the-aranet4-do)
+- [Aranet4 service UUID change](https://forum.aranet.com/aranet-home-devices-aranet4-aranet2-aranet-radiation-aranet-radon/aranet4-with-firmware-v.1.2.0-or-greater-integration-notes/)
+- [Pebble communication choices](https://developer.repebble.com/guides/communication/)
+- [PebbleKit Android 2](https://github.com/pebble-dev/PebbleKitAndroid2)
+- [Aranet4-Python](https://github.com/Anrijs/Aranet4-Python)
 
-- UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
-- Watch cache: key `4101`, version `1`
+## Namespaces
+
+- Watchapp UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
+- Android package: `com.skarian.airquality`
+- Watch cache: key `4102`, version `2`
+- Android database: `airquality-readings.db`
+- Notification ID/channel: `4102` / `airquality-monitor`
 - QA scratch: `/private/tmp/airquality-qa-*`
-- Flash backup: `.airquality-qa-backup-*`
-- Production and QA use no loopback port
+- Emulator lock: `/private/tmp/pebble-emulator-qa.lock`
+- Production and QA use no network port

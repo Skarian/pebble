@@ -1,12 +1,14 @@
 {
   "name": "air-quality",
   "author": "Neil Skaria",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "keywords": ["pebble-app", "air-quality"],
   "private": true,
   "dependencies": {},
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "android:test": "cd android && ./gradlew testDebugUnitTest",
+    "android:build": "cd android && ./gradlew assembleDebug",
     "qa": "node scripts/qa.mjs",
     "qa:screenshots": "node scripts/qa.mjs"
   },
@@ -14,22 +16,26 @@
     "displayName": "AirQuality",
     "uuid": "496e29b5-9542-430b-b75a-14dbb399b884",
     "sdkVersion": "3",
-    "enableMultiJS": true,
     "targetPlatforms": ["emery"],
-    "capabilities": ["configurable"],
     "watchapp": {"watchface": false},
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/Skarian/pebble",
+        "apps": [{"package": "com.skarian.airquality"}]
+      }
+    },
     "messageKeys": {
       "PROTOCOL": 0, "COMMAND": 1, "REQUEST_ID": 2, "STATUS": 3,
-      "FETCHED_AT": 4, "FLAGS": 5, "LOCATION": 6, "ERROR_TEXT": 7,
-      "AQI": 10, "PM25_X10": 11, "CO2": 12,
-      "TEMP_X10": 14, "HUMIDITY_X10": 15,
-      "DAY0_DATE": 20, "DAY0_AQI": 21, "DAY0_PM25_X10": 22, "DAY0_CO2": 23, "DAY0_TEMP_X10": 25, "DAY0_HUMIDITY_X10": 26,
-      "DAY1_DATE": 27, "DAY1_AQI": 28, "DAY1_PM25_X10": 29, "DAY1_CO2": 30, "DAY1_TEMP_X10": 32, "DAY1_HUMIDITY_X10": 33,
-      "DAY2_DATE": 34, "DAY2_AQI": 35, "DAY2_PM25_X10": 36, "DAY2_CO2": 37, "DAY2_TEMP_X10": 39, "DAY2_HUMIDITY_X10": 40,
-      "DAY3_DATE": 41, "DAY3_AQI": 42, "DAY3_PM25_X10": 43, "DAY3_CO2": 44, "DAY3_TEMP_X10": 46, "DAY3_HUMIDITY_X10": 47,
-      "DAY4_DATE": 48, "DAY4_AQI": 49, "DAY4_PM25_X10": 50, "DAY4_CO2": 51, "DAY4_TEMP_X10": 53, "DAY4_HUMIDITY_X10": 54,
-      "DAY5_DATE": 55, "DAY5_AQI": 56, "DAY5_PM25_X10": 57, "DAY5_CO2": 58, "DAY5_TEMP_X10": 60, "DAY5_HUMIDITY_X10": 61,
-      "DAY6_DATE": 62, "DAY6_AQI": 63, "DAY6_PM25_X10": 64, "DAY6_CO2": 65, "DAY6_TEMP_X10": 67, "DAY6_HUMIDITY_X10": 68
+      "OBSERVED_AT": 4, "FLAGS": 5, "LOCATION": 6, "ERROR_TEXT": 7,
+      "CO2_STATE": 8, "BATTERY": 9,
+      "CO2": 10, "TEMP_X10": 11, "HUMIDITY_X10": 12, "PRESSURE_X10": 13,
+      "DAY0_DATE": 20, "DAY0_CO2": 21, "DAY0_TEMP_X10": 22, "DAY0_HUMIDITY_X10": 23, "DAY0_PRESSURE_X10": 24,
+      "DAY1_DATE": 25, "DAY1_CO2": 26, "DAY1_TEMP_X10": 27, "DAY1_HUMIDITY_X10": 28, "DAY1_PRESSURE_X10": 29,
+      "DAY2_DATE": 30, "DAY2_CO2": 31, "DAY2_TEMP_X10": 32, "DAY2_HUMIDITY_X10": 33, "DAY2_PRESSURE_X10": 34,
+      "DAY3_DATE": 35, "DAY3_CO2": 36, "DAY3_TEMP_X10": 37, "DAY3_HUMIDITY_X10": 38, "DAY3_PRESSURE_X10": 39,
+      "DAY4_DATE": 40, "DAY4_CO2": 41, "DAY4_TEMP_X10": 42, "DAY4_HUMIDITY_X10": 43, "DAY4_PRESSURE_X10": 44,
+      "DAY5_DATE": 45, "DAY5_CO2": 46, "DAY5_TEMP_X10": 47, "DAY5_HUMIDITY_X10": 48, "DAY5_PRESSURE_X10": 49,
+      "DAY6_DATE": 50, "DAY6_CO2": 51, "DAY6_TEMP_X10": 52, "DAY6_HUMIDITY_X10": 53, "DAY6_PRESSURE_X10": 54
     },
     "resources": {"media": []}
   }

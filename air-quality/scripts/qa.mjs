@@ -2,8 +2,8 @@
 
 import {spawn, spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
-import {chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
-import {basename, dirname, join, resolve} from 'node:path';
+import {existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {dirname, join, resolve} from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 
@@ -14,29 +14,12 @@ const CAPTURE = resolve(REPO, 'pebble-screenshot-tool/capture.py');
 const PBW = resolve(ROOT, 'build/air-quality.pbw');
 const require = createRequire(import.meta.url);
 const Model = require('../src/common/air_quality_model');
-const Aranet = require('../src/common/aranet_client');
 const MESSAGE_KEYS = require('../package.json').pebble.messageKeys;
 
-export function parseEnv(text) {
-  const values = {};
-  for (const source of String(text || '').split(/\r?\n/)) {
-    const line = source.trim();
-    if (!line || line.startsWith('#')) continue;
-    const split = line.indexOf('=');
-    if (split < 1) continue;
-    let value = line.slice(split + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    values[line.slice(0, split).replace(/^export\s+/, '').trim()] = value;
-  }
-  return values;
-}
-
 export function chooseSource(env) {
-  const mode = String(env.AIRQUALITY_QA_SOURCE || '').toLowerCase();
-  if (mode && mode !== 'fake' && mode !== 'live') throw new Error('AIRQUALITY_QA_SOURCE must be fake or live');
-  const complete = Boolean(env.ARANET_API_KEY && env.ARANET_SENSOR_ID && env.ARANET_LOCATION);
-  if (mode === 'live' && !complete) throw new Error('Live QA requires all three ARANET fields');
-  return mode === 'fake' || !complete ? 'fake' : 'live';
+  const mode = String(env.AIRQUALITY_QA_SOURCE || 'fake').toLowerCase();
+  if (mode !== 'fake' && mode !== 'live') throw new Error('AIRQUALITY_QA_SOURCE must be fake or live');
+  return mode;
 }
 
 function wait(ms) { return new Promise((resolveWait) => setTimeout(resolveWait, ms)); }
@@ -56,8 +39,12 @@ async function acquireLock() {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {cwd: options.cwd || ROOT, encoding: options.capture ? 'utf8' : undefined,
-    stdio: options.capture ? 'pipe' : 'inherit', env: options.env || process.env});
+  const result = spawnSync(command, args, {
+    cwd: options.cwd || ROOT,
+    encoding: options.capture ? 'utf8' : undefined,
+    stdio: options.capture ? 'pipe' : 'inherit',
+    env: options.env || process.env,
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} exited with ${result.status}`);
   return options.capture ? result.stdout.trim() : '';
@@ -82,81 +69,109 @@ function isolateFlash() {
 }
 
 function startSession() {
-  const child = spawn(pebblePython(), [CAPTURE, '--emulator', 'emery', '--serve', '--pbw', PBW, '--platform', 'emery', '--timeout', '120'],
-    {cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe']});
+  const child = spawn(pebblePython(), [CAPTURE, '--emulator', 'emery', '--serve',
+    '--pbw', PBW, '--platform', 'emery', '--timeout', '120'],
+  {cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe']});
   child.stderr.on('data', (chunk) => process.stderr.write(chunk));
   const lines = createInterface({input: child.stdout});
   const pending = [];
   let readyResolve, readyReject;
-  const ready = new Promise((resolveReady, rejectReady) => { readyResolve = resolveReady; readyReject = rejectReady; });
+  const ready = new Promise((resolveReady, rejectReady) => {
+    readyResolve = resolveReady; readyReject = rejectReady;
+  });
   lines.on('line', (line) => {
     let message; try { message = JSON.parse(line); } catch { return; }
     if (message.event === 'ready') readyResolve(message);
-    else { const next = pending.shift(); if (next) message.event === 'error' ? next.reject(new Error(message.message)) : next.resolve(message); }
+    else {
+      const next = pending.shift();
+      if (next) message.event === 'error' ? next.reject(new Error(message.message)) : next.resolve(message);
+    }
   });
-  child.once('exit', (code) => { const error = new Error(`capture session exited with ${code}`); readyReject(error); while (pending.length) pending.shift().reject(error); });
-  return {child, ready, capture(output, buttons = [], message = null) {
-    return new Promise((resolveCapture, reject) => { pending.push({resolve: resolveCapture, reject}); child.stdin.write(JSON.stringify({command: 'capture', output, buttons, message}) + '\n'); });
-  }, async close() {
-    if (child.exitCode !== null) return;
-    child.stdin.write(JSON.stringify({command: 'close'}) + '\n');
-    await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), wait(3000)]);
-    if (child.exitCode === null) child.kill('SIGKILL');
-  }};
+  child.once('exit', (code) => {
+    const error = new Error(`capture session exited with ${code}`);
+    readyReject(error);
+    while (pending.length) pending.shift().reject(error);
+  });
+  return {
+    child, ready,
+    capture(output, buttons = [], message = null) {
+      return new Promise((resolveCapture, reject) => {
+        pending.push({resolve: resolveCapture, reject});
+        child.stdin.write(JSON.stringify({command: 'capture', output, buttons, message}) + '\n');
+      });
+    },
+    async close() {
+      if (child.exitCode !== null) return;
+      child.stdin.write(JSON.stringify({command: 'close'}) + '\n');
+      await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), wait(3000)]);
+      if (child.exitCode === null) child.kill('SIGKILL');
+    },
+  };
 }
 
 function encode(dictionary) {
   const encoded = {};
   for (const [name, value] of Object.entries(dictionary)) {
     if (MESSAGE_KEYS[name] === undefined) continue;
-    let type = 'uint16';
+    let type = 'int32';
     if (name === 'LOCATION' || name === 'ERROR_TEXT') type = 'cstring';
-    else if (name === 'FETCHED_AT' || name.endsWith('_DATE')) type = 'uint32';
-    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS'].includes(name)) type = 'uint8';
+    else if (name === 'OBSERVED_AT' || name.endsWith('_DATE')) type = 'uint32';
+    else if (name === 'REQUEST_ID') type = 'uint16';
+    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS', 'CO2_STATE'].includes(name)) type = 'uint8';
     encoded[MESSAGE_KEYS[name]] = {type, value};
   }
   return encoded;
 }
 
-function status(statusCode, text) { return encode({PROTOCOL: 1, STATUS: statusCode, ERROR_TEXT: text || ''}); }
+function status(statusCode, requestId, text) {
+  return encode({PROTOCOL: 1, STATUS: statusCode, REQUEST_ID: requestId, ERROR_TEXT: text || ''});
+}
 
 function dateOffset(days) {
-  const date = new Date(); date.setHours(12, 0, 0, 0); date.setDate(date.getDate() - days);
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - days);
   return date.toISOString().slice(0, 10);
 }
 
-function snapshot(aqi, options = {}) {
-  const base = {aqi, pm25: options.pm25 ?? Math.max(2, aqi / 4), co2: options.co2 ?? 612,
-    temperature: options.temperature ?? 22.4, humidity: options.humidity ?? 46.2};
-  const daily = Array.from({length: 7}, (_, index) => ({date: dateOffset(index + (options.ageDays || 0)), aqi: Math.max(4, aqi - index * 3),
-    pm25: Math.max(1, base.pm25 - index), co2: base.co2 - index * 9,
-    temperature: base.temperature - index * 0.2, humidity: base.humidity + index * 0.4}));
-  if (options.missingMetric) { delete base.co2; daily.forEach((row) => delete row.co2); }
+function snapshot(co2, options = {}) {
+  const base = {
+    co2,
+    co2State: options.co2State ?? (co2 < 1000 ? 1 : co2 <= 1400 ? 2 : 3),
+    temperature: options.temperature ?? 22.4,
+    humidity: options.humidity ?? 46.2,
+    pressure: options.pressure ?? 1008.6,
+    battery: options.battery ?? 87,
+  };
+  const daily = Array.from({length: 7}, (_, index) => ({
+    date: dateOffset(index + (options.ageDays || 0)),
+    co2: Math.max(420, co2 - index * 35),
+    temperature: base.temperature - index * 0.2,
+    humidity: base.humidity + index * 0.4,
+    pressure: base.pressure + index * 0.6,
+  }));
+  if (options.missingMetric) {
+    delete base.pressure;
+    daily.forEach((row) => delete row.pressure);
+  }
   if (options.missingHistory) daily.splice(0, 7);
   return {location: 'HOME', current: base, daily, stale: Boolean(options.stale)};
 }
 
-async function liveSnapshot(env) {
-  const cachePath = resolve(ROOT, 'data/qa-live-cache.json');
-  if (existsSync(cachePath) && env.AIRQUALITY_QA_REFRESH_LIVE !== '1') {
-    const cached = JSON.parse(readFileSync(cachePath, 'utf8'));
-    if (Date.now() - cached.cachedAt < 24 * 60 * 60 * 1000) return cached.snapshot;
+function liveSnapshot(env) {
+  if (env.AIRQUALITY_QA_REFRESH_LIVE === '1') {
+    throw new Error('Live refresh requires the installed Android companion and Aranet4');
   }
-  const url = 'https://aranet.cloud/api/v1/measurements/history?sensor=' +
-    encodeURIComponent(env.ARANET_SENSOR_ID) + '&days=7&limit=10000';
-  const response = await fetch(url, {headers: {ApiKey: env.ARANET_API_KEY}, signal: AbortSignal.timeout(15000)});
-  if (!response.ok) throw new Error(`Aranet live QA returned HTTP ${response.status}`);
-  const body = await response.json();
-  const normalized = Aranet.normalizeHistory(body.readings || [], env.ARANET_LOCATION, body.links || {});
-  mkdirSync(dirname(cachePath), {recursive: true});
-  writeFileSync(cachePath, JSON.stringify({cachedAt: Date.now(), snapshot: normalized}), {mode: 0o600});
-  chmodSync(cachePath, 0o600);
-  return normalized;
+  const cachePath = resolve(ROOT, 'data/android-live-cache.json');
+  if (!existsSync(cachePath)) {
+    throw new Error('Live QA requires data/android-live-cache.json from one Android companion refresh');
+  }
+  return JSON.parse(readFileSync(cachePath, 'utf8')).snapshot;
 }
 
 function createBoard(states, output) {
   const labels = states.flatMap((state, index) => [
-    '(', state.path, '-set', 'label', `${index + 1}. ${state.label}`, ')'
+    '(', state.path, '-set', 'label', `${index + 1}. ${state.label}`, ')',
   ]);
   run('magick', ['montage', ...labels, '-filter', 'point', '-resize', '400x456',
     '-tile', '4x', '-geometry', '400x456+24+64', '-background', '#0d100e',
@@ -164,21 +179,22 @@ function createBoard(states, output) {
 }
 
 async function main() {
-  const fileEnv = existsSync(resolve(ROOT, '.env')) ? parseEnv(readFileSync(resolve(ROOT, '.env'), 'utf8')) : {};
-  const env = {...fileEnv, ...process.env};
+  const env = process.env;
   const source = chooseSource(env);
-  const live = source === 'live' ? await liveSnapshot(env) : null;
+  const live = source === 'live' ? liveSnapshot(env) : null;
   const releaseLock = await acquireLock();
   let restoreFlash, session;
   const stamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);
   const output = resolve(ROOT, 'qa-results', `all-screens-${stamp}-${source}`);
-  const states = join(output, 'states'); mkdirSync(states, {recursive: true});
+  const states = join(output, 'states');
+  mkdirSync(states, {recursive: true});
   const manifest = [];
   try {
     run('npm', ['test']);
     run('pebble', ['build']);
     restoreFlash = isolateFlash();
-    session = startSession(); await session.ready;
+    session = startSession();
+    await session.ready;
     let number = 0;
     async function capture(label, message, buttons = []) {
       number += 1;
@@ -187,33 +203,33 @@ async function main() {
       await session.capture(raw, buttons, message);
       manifest.push({number, label, file: `states/${filename}`, path: raw});
     }
-    await capture('SETUP REQUIRED', status(1));
+
+    await capture('SETUP REQUIRED', status(1, 1));
     await capture('LOADING', null, ['select']);
-    await capture('AUTH FAILURE', status(2, 'Aranet API access denied'));
-    await capture('RATE LIMIT', status(3, 'Refresh limit reached'));
-    await capture('PHONE OFFLINE', status(4, 'Pebble phone unavailable'));
-    await capture('NETWORK FAILURE', status(5, 'Phone network unavailable'));
-    await capture('TIMEOUT', status(6, 'Aranet request timed out'));
-    await capture('SERVICE FAILURE', status(7, 'Aranet Cloud unavailable'));
-    await capture('GOOD', encode(Model.dictionary(snapshot(34), Date.now(), 0)));
-    await capture('MODERATE', encode(Model.dictionary(snapshot(72, {pm25: 22}), Date.now(), 0)));
-    await capture('SENSITIVE GROUPS', encode(Model.dictionary(snapshot(128, {pm25: 46}), Date.now(), 0)));
-    await capture('UNHEALTHY', encode(Model.dictionary(snapshot(175, {pm25: 70}), Date.now(), 0)));
-    await capture('VERY UNHEALTHY', encode(Model.dictionary(snapshot(250, {pm25: 120}), Date.now(), 0)));
-    await capture('HAZARDOUS', encode(Model.dictionary(snapshot(322, {pm25: 235}), Date.now(), 0)));
-    await capture('MISSING METRIC', encode(Model.dictionary(snapshot(58, {missingMetric: true}), Date.now(), 0)));
-    await capture('STALE DATA', encode(Model.dictionary(snapshot(72, {stale: true, ageDays: 3}), Date.now() - 3 * 86400000, 0)));
-    await capture('MISSING HISTORY', encode(Model.dictionary(snapshot(48, {missingHistory: true}), Date.now(), 0)));
-    await capture('CURRENT READING', encode(Model.dictionary(snapshot(44), Date.now(), 0)));
-    for (const label of ['AQI CHART', 'PM2.5 CHART', 'CO2 CHART', 'TEMP CHART', 'HUMIDITY CHART']) {
+    await capture('COMPANION OFFLINE', status(2, 2));
+    await capture('BLUETOOTH OFF', status(3, 2));
+    await capture('PERMISSION NEEDED', status(4, 2));
+    await capture('SENSOR UNAVAILABLE', status(5, 2));
+    await capture('TIMEOUT', status(6, 2));
+    await capture('SERVICE FAILURE', status(7, 2));
+    await capture('GOOD', encode(Model.dictionary(snapshot(720, {co2State: 1}), Date.now(), 2)));
+    await capture('AVERAGE', encode(Model.dictionary(snapshot(1180, {co2State: 2}), Date.now(), 2)));
+    await capture('UNHEALTHY', encode(Model.dictionary(snapshot(1650, {co2State: 3}), Date.now(), 2)));
+    await capture('MISSING METRIC', encode(Model.dictionary(snapshot(820, {missingMetric: true}), Date.now(), 2)));
+    await capture('STALE DATA', encode(Model.dictionary(snapshot(1120, {stale: true, ageDays: 3}), Date.now() - 3 * 86400000, 2)));
+    await capture('MISSING HISTORY', encode(Model.dictionary(snapshot(760, {missingHistory: true}), Date.now(), 2)));
+    await capture('CURRENT READING', encode(Model.dictionary(snapshot(612), Date.now(), 2)));
+    for (const label of ['CO2 CHART', 'TEMP CHART', 'HUMIDITY CHART', 'PRESSURE CHART']) {
       await capture(label, null, ['down']);
     }
     if (live) {
-      await capture('LIVE CURRENT', encode(Model.dictionary(live, Date.now(), 0)), ['up', 'up', 'up', 'up', 'up']);
+      await capture('LIVE CURRENT', encode(Model.dictionary(live, Date.now(), 2)), ['up', 'up', 'up', 'up']);
     }
     const board = join(output, 'all-states.png');
     createBoard(manifest, board);
-    writeFileSync(join(output, 'manifest.json'), JSON.stringify({source, pbw: PBW, screens: manifest.map(({path, ...item}) => item)}, null, 2));
+    writeFileSync(join(output, 'manifest.json'), JSON.stringify({
+      source, pbw: PBW, screens: manifest.map(({path, ...item}) => item),
+    }, null, 2));
     console.log(`AIRQUALITY_QA_BOARD=${board}`);
     console.log(`AIRQUALITY_PBW=${PBW}`);
   } finally {
@@ -224,5 +240,8 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => { console.error(`AirQuality QA failed: ${error.message}`); process.exitCode = 1; });
+  main().catch((error) => {
+    console.error(`AirQuality QA failed: ${error.message}`);
+    process.exitCode = 1;
+  });
 }

@@ -1,80 +1,73 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
+
 const watch = readFileSync(new URL('../src/c/main.c', import.meta.url), 'utf8');
-const phone = readFileSync(new URL('../src/pkjs/index.js', import.meta.url), 'utf8');
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const wscript = readFileSync(new URL('../wscript', import.meta.url), 'utf8');
+const companion = readFileSync(new URL('../android/app/src/main/java/com/skarian/airquality/AirQualityPebbleService.kt', import.meta.url), 'utf8');
+const scanner = readFileSync(new URL('../android/app/src/main/java/com/skarian/airquality/AranetScanner.kt', import.meta.url), 'utf8');
+const protocol = readFileSync(new URL('../android/app/src/main/java/com/skarian/airquality/PebbleProtocol.kt', import.meta.url), 'utf8');
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
 
-test('watch keeps a versioned last-good cache and rejects stale request IDs', () => {
-  assert.match(watch, /CACHE_VERSION 1/);
-  assert.match(watch, /PERSIST_KEY_CACHE 4101/);
-  assert.match(watch, /request->value->uint16 != s_request_id/);
+test('watch keeps a new versioned last-good cache and rejects stale responses', () => {
+  assert.match(watch, /CACHE_VERSION 2/);
+  assert.match(watch, /PERSIST_KEY_CACHE 4102/);
+  assert.match(watch, /!request \|\| request->value->uint16 != s_request_id/);
+  assert.match(watch, /observed->value->uint32 < s_cache\.observed_at/);
   assert.match(watch, /persist_write_data\(PERSIST_KEY_CACHE/);
 });
 
-test('navigation is bounded and manual refresh blocks duplicates', () => {
+test('navigation is one bounded current page plus four charts', () => {
+  assert.match(watch, /PAGE_COUNT 5/);
   assert.match(watch, /if \(s_loading\) return/);
   assert.match(watch, /if \(s_page > 0\)/);
   assert.match(watch, /s_page \+ 1 < PAGE_COUNT/);
-  assert.match(watch, /RESPONSE_TIMEOUT_MS 30000/);
+  assert.deepEqual(packageJson.pebble.messageKeys.CO2, 10);
+  assert.deepEqual(packageJson.pebble.messageKeys.DAY6_PRESSURE_X10, 54);
 });
 
-test('phone-ready handshake retries launch delivery and outbox failures surface', () => {
-  assert.match(watch, /COMMAND_PHONE_READY[\s\S]*if \(s_loading\)[\s\S]*request_refresh\(\)/);
-  assert.match(watch, /dict_write_uint8\(iter, MESSAGE_KEY_PROTOCOL, 1\)/);
-  assert.match(watch, /app_message_register_outbox_failed\(outbox_failed\)/);
+test('production routes through Android companion and bundles no PebbleKit JS', () => {
+  assert.equal(packageJson.pebble.companionApp.android.apps[0].package, 'com.skarian.airquality');
+  assert.doesNotMatch(wscript, /js_entry_file|src\/pkjs/);
+  assert.equal(existsSync(new URL('../src/pkjs/index.js', import.meta.url)), false);
+  assert.match(companion, /BasePebbleListenerService/);
+  assert.match(companion, /latestRequest\.get\(\) != requestId/);
+  assert.match(companion, /DefaultPebbleSender/);
 });
 
-test('typography follows CPAP large system-font hierarchy', () => {
+test('Aranet4 metrics and services replace all cloud AQI assumptions', () => {
+  assert.match(scanner, /MANUFACTURER_ID/);
+  assert.match(protocol, /PRESSURE_X10 = 13/);
+  assert.match(watch, /\{"CO2", "TEMP", "RH", "PRESS"\}/);
+  assert.doesNotMatch(watch + companion + protocol, /AQI|PM2\.5|apiCredential|ApiKey|aranet\.cloud/i);
+});
+
+test('typography and plain headers keep the CPAP hierarchy', () => {
   assert.match(watch, /FONT_KEY_BITHAM_42_BOLD/);
-  assert.match(watch, /METRIC_NAMES\[metric\], fonts_get_system_font\(FONT_KEY_GOTHIC_24_BOLD\)/);
-  assert.match(watch, /title, fonts_get_system_font\(FONT_KEY_GOTHIC_28_BOLD\)/);
-  assert.match(watch, /body, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
-  assert.match(watch, /footer, fonts_get_system_font\(FONT_KEY_GOTHIC_18_BOLD\)/);
-});
-
-test('headers and update footer follow the plain CPAP layout', () => {
-  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "AQI"\)/);
-  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, title\)/);
+  assert.match(watch, /FONT_KEY_GOTHIC_24_BOLD/);
+  assert.match(watch, /FONT_KEY_GOTHIC_28_BOLD/);
+  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "CO2"\)/);
   assert.doesNotMatch(watch, /graphics_fill_rect\(ctx, GRect\(0, 0, bounds\.size\.w, 30\)/);
-  assert.doesNotMatch(watch, /bounds\.size\.h - 19/);
-  assert.doesNotMatch(watch, /Partial - %s/);
-  assert.doesNotMatch(watch, /Stale - %s/);
-  assert.match(watch, /Updated just now/);
-  assert.match(watch, /Updated %lum ago/);
-  assert.match(watch, /Updated %lud ago/);
 });
 
-test('current AQI uses one label and native watch-safe faces', () => {
-  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "AQI"\)/);
-  assert.match(watch, /draw_face\(ctx, s_cache\.current\[0\]\)/);
-  assert.match(watch, /aqi <= 50 \? 1 : aqi <= 100 \? 2 : aqi <= 150 \? 3/);
-  assert.match(watch, /aqi <= 200 \? 4 : aqi <= 300 \? 5 : 6/);
-  assert.match(watch, /if \(band == 6\)/);
-  assert.match(watch, /if \(band == 5\)[\s\S]{0,180}GPoint\(20, 49\)/);
-  assert.match(watch, /const GPoint center = GPoint\(33, 60\)/);
-  assert.match(watch, /graphics_draw_arc/);
-  assert.doesNotMatch(watch, /"HEALTHY"|"MODERATE"|"ELEVATED"|"UNHEALTHY"|"HAZARDOUS"/);
-  assert.doesNotMatch(watch, /draw_text\(ctx, "AQI"/);
-  for (const [label, value] of [['GOOD', 34], ['MODERATE', 72], ['SENSITIVE GROUPS', 128],
-    ['UNHEALTHY', 175], ['VERY UNHEALTHY', 250], ['HAZARDOUS', 322]]) {
+test('current state uses the three Aranet display states and concise stale copy', () => {
+  assert.match(watch, /if \(state == 1\)/);
+  assert.match(watch, /if \(state == 3\)/);
+  assert.match(watch, /Updated %lud ago/);
+  assert.doesNotMatch(watch, /"PARTIAL|"STALE|medical|ventilat/i);
+  for (const [label, value] of [['GOOD', 720], ['AVERAGE', 1180], ['UNHEALTHY', 1650]]) {
     assert.match(qa, new RegExp(`capture\\('${label}'.*snapshot\\(${value}`));
   }
 });
 
-test('secrets remain phone-only and production has no QA or loopback route', () => {
-  assert.match(phone, /airquality\.settings\.v1/);
-  assert.match(phone, /API key stays on your phone/);
-  assert.doesNotMatch(watch, /ARANET_API_KEY|sharingId|127\.0\.0\.1|QA_/);
-  assert.doesNotMatch(phone, /127\.0\.0\.1|qa-results|fake/i);
-  assert.match(phone, /readJson\(DIAGNOSTICS_KEY, \[\]\)\.forEach/);
-});
-
-test('QA uses the shared lock, isolated flash, and no global emulator kill', () => {
+test('QA owns fake states, shared lock, isolated flash, and no global emulator kill', () => {
   assert.match(qa, /pebble-emulator-qa\.lock/);
   assert.match(qa, /airquality-qa-backup/);
   assert.doesNotMatch(qa, /pebble', \['kill/);
   assert.match(qa, /all-states\.png/);
   assert.match(qa, /-background', '#0d100e'/);
-  assert.match(qa, /-set', 'label'/);
+  assert.match(qa, /COMPANION OFFLINE/);
+  assert.match(qa, /BLUETOOTH OFF/);
+  assert.match(qa, /PERMISSION NEEDED/);
 });
