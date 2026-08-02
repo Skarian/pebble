@@ -3,7 +3,7 @@
 An original retro-futurist CRT watchface for Pebble Time 2 (Emery), inspired by
 wrist-mounted field instruments.
 
-![Field Terminal watchface](presented_emery.png)
+<img src="presented_emery.png" width="200" alt="Field Terminal watchface">
 
 ## Features
 

@@ -9,7 +9,7 @@ PNG containing:
 - room light;
 - backlight.
 
-![Example Pebble lighting variants](examples/screenshot-variants/current-emulator-variants.png)
+<img src="examples/screenshot-variants/current-emulator-variants.png" width="684" alt="Example Pebble lighting variants">
 
 ## Run it
 

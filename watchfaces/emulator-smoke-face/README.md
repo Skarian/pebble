@@ -4,7 +4,7 @@ A deliberately minimal digital watchface used to verify the modern Pebble
 emulator pipeline. It renders a centered seconds clock on both rectangular
 Emery and round Gabbro displays.
 
-![Emulator Smoke Face on Gabbro](screenshots/qa-local-gabbro-20260801.png)
+<img src="screenshots/qa-local-gabbro-20260801.png" width="640" alt="Emulator Smoke Face on Gabbro">
 
 ## Build and run
 

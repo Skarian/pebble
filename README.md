@@ -17,7 +17,7 @@ your wrist. The Android companion reads the sensor directly over Bluetooth.
 Review the last seven nights of ResMed myAir scores, details, and trends without
 opening the phone app.
 
-<img src="apps/cpap/screenshots/cpap-all-screens-fake.png" width="472" alt="CPAP score and status screens on Pebble">
+<img src="apps/cpap/docs/cpap.png" width="200" alt="CPAP showing a nightly myAir score on Pebble">
 
 ### [Hubitat](apps/hubitat)
 

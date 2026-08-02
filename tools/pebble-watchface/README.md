@@ -3,7 +3,7 @@
 Templates and helper scripts for taking a Pebble watchface from an idea to a
 built PBW with emulator screenshots and visual verification.
 
-![Example watchface produced with the Pebble workflow](../../watchfaces/casio-field-face-c/emulator-current.png)
+<img src="../../watchfaces/casio-field-face-c/emulator-current.png" width="200" alt="Example watchface produced with the Pebble workflow">
 
 The toolkit defaults to Pebble Time 2 (`emery`) and includes:
 
