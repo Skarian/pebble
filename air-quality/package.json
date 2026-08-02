@@ -1,0 +1,40 @@
+{
+  "name": "air-quality",
+  "author": "Neil Skaria",
+  "version": "0.10.0",
+  "keywords": ["pebble-app", "air-quality"],
+  "private": true,
+  "dependencies": {},
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "android:test": "cd android && ./gradlew testDebugUnitTest",
+    "android:build": "cd android && ./gradlew assembleDebug",
+    "qa": "node scripts/qa.mjs",
+    "qa:screenshots": "node scripts/qa.mjs"
+  },
+  "pebble": {
+    "displayName": "AirQuality",
+    "uuid": "496e29b5-9542-430b-b75a-14dbb399b884",
+    "sdkVersion": "3",
+    "targetPlatforms": ["emery"],
+    "watchapp": {"watchface": false},
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/Skarian/pebble",
+        "apps": [{"package": "com.skarian.airquality"}]
+      }
+    },
+    "messageKeys": {
+      "PROTOCOL": 0, "COMMAND": 1, "REQUEST_ID": 2, "STATUS": 3,
+      "OBSERVED_AT": 4, "FLAGS": 5, "LOCATION": 6, "ERROR_TEXT": 7,
+      "CO2_STATE": 8, "BATTERY": 9,
+      "CO2": 10, "TEMP_X10": 11, "HUMIDITY_X10": 12, "PRESSURE_X10": 13,
+      "SCALE": 14, "POINT_COUNT": 15, "WINDOW_START": 16,
+      "SERIES_CO2": 60, "SERIES_TEMP_X10": 61,
+      "SERIES_HUMIDITY_X10": 62, "SERIES_PRESSURE_X10": 63,
+      "AVG_CO2": 64, "AVG_TEMP_X10": 65,
+      "AVG_HUMIDITY_X10": 66, "AVG_PRESSURE_X10": 67
+    },
+    "resources": {"media": []}
+  }
+}
