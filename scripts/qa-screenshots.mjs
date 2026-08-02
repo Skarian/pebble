@@ -111,7 +111,7 @@ function records(scores) {
     startDate: localDateOffset(index + 1),
     sleepScore: score,
     totalUsage: [452, 481, 0, 376, 438, 287, 414][index],
-    ahi: [0.8, 1.1, 0, 2.3, 0.4, 4.7, 1.6][index],
+    ahi: [0.8, 1.1, 0, 1.3, 0.4, 1.2, 0.9][index],
     maskPairCount: [1, 0, 0, 2, 1, 4, 1][index],
     leakPercentile: [8, 4.5, 0, 12.4, 6, 24.8, 9.2][index]
   }]);

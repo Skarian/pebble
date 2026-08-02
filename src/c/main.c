@@ -68,11 +68,6 @@ static bool s_loading;
 static uint8_t s_status;
 static char s_error_text[49];
 
-static const char *MONTHS[] = {
-  "", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
-};
-
 static const char *WEEKDAYS[] = {
   "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
 };
@@ -196,21 +191,28 @@ static uint32_t graph_value(uint8_t view, int day, bool *available) {
 }
 
 static uint32_t graph_scale_max(uint8_t view) {
-  uint32_t maximum = view == VIEW_SCORE_GRAPH ? 100 :
-                     view == VIEW_USAGE_GRAPH ? 480 :
-                     view == VIEW_EVENTS_GRAPH ? 50 :
-                     view == VIEW_MASK_GRAPH ? 5 : 240;
-  if (view == VIEW_SCORE_GRAPH) return maximum;
+  uint32_t maximum = 0;
   for (int i = 0; i < DAYS; i++) {
     bool available = false;
     uint32_t value = graph_value(view, i, &available);
     if (available && value > maximum) maximum = value;
   }
-  if (view == VIEW_USAGE_GRAPH) return ((maximum + 59) / 60) * 60;
-  if (view == VIEW_EVENTS_GRAPH || view == VIEW_LEAK_GRAPH) {
-    return ((maximum + 49) / 50) * 50;
+  if (view == VIEW_SCORE_GRAPH) {
+    maximum = maximum ? ((maximum + 9) / 10) * 10 : 10;
+    return maximum > 100 ? 100 : maximum;
   }
-  return maximum;
+  if (view == VIEW_USAGE_GRAPH) {
+    return maximum ? ((maximum + 59) / 60) * 60 : 60;
+  }
+  if (view == VIEW_EVENTS_GRAPH) {
+    if (!maximum) return 1;
+    uint32_t step = maximum <= 10 ? 1 : maximum <= 50 ? 5 : 10;
+    return ((maximum + step - 1) / step) * step;
+  }
+  if (view == VIEW_LEAK_GRAPH) {
+    return maximum ? ((maximum + 9) / 10) * 10 : 10;
+  }
+  return maximum ? maximum : 1;
 }
 
 static void format_graph_max(char *buffer, size_t size, uint8_t view, uint32_t maximum) {
@@ -255,8 +257,8 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   const int chart_left = 8;
   const int chart_right = bounds.size.w - 8;
-  const int chart_top = 26;
-  const int chart_bottom = 157;
+  const int chart_top = 32;
+  const int chart_bottom = 151;
   const int chart_height = chart_bottom - chart_top;
   const int slot_width = (chart_right - chart_left) / DAYS;
   const int bar_width = 16;
@@ -264,6 +266,7 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
   const int average_marker_base = average_marker_tip + 6;
   const int average_marker_bar = average_marker_base + 2;
   GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont stat_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   uint32_t maximum = graph_scale_max(s_view);
   uint32_t average_total = 0;
   uint8_t average_days = 0;
@@ -287,8 +290,9 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
   format_graph_max(max_text, sizeof(max_text), s_view, maximum);
-  graphics_draw_text(ctx, max_text, label_font, GRect(chart_left, 0, 96, 22),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, max_text, stat_font,
+                     GRect(chart_left, 0, chart_right - chart_left, 28),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
   graphics_draw_line(ctx, GPoint(chart_left, chart_top),
                      GPoint(chart_right, chart_top));
   graphics_draw_line(ctx, GPoint(chart_left, chart_bottom),
@@ -346,7 +350,7 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
 
   format_graph_average(average_text, sizeof(average_text), s_view,
                        average_total, average_days);
-  graphics_draw_text(ctx, average_text, label_font, GRect(8, 180, bounds.size.w - 16, 22),
+  graphics_draw_text(ctx, average_text, stat_font, GRect(8, 174, bounds.size.w - 16, 28),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -396,9 +400,7 @@ static void render_data(void) {
   int day = 0;
   parse_date(packed_date, &year, &month, &day);
   if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-    int weekday = day_of_week(year, month, day);
-    snprintf(date_text, sizeof(date_text), "%s %s %d",
-             WEEKDAYS[weekday], MONTHS[month], day);
+    snprintf(date_text, sizeof(date_text), "%02d/%02d", month, day);
   } else {
     snprintf(date_text, sizeof(date_text), "DAY %d", s_selected_day + 1);
   }
@@ -685,34 +687,34 @@ static void window_load(Window *window) {
                                     FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft, GColorBlack);
   text_layer_set_text(s_title_layer, "CPAP");
 
-  s_date_layer = create_text_layer(root, GRect(64, 2, bounds.size.w - 72, 22),
-                                   FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentRight, GColorBlack);
+  s_date_layer = create_text_layer(root, GRect(64, 0, bounds.size.w - 72, 28),
+                                   FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight, GColorBlack);
 
   s_graph_layer = layer_create(GRect(0, 26, bounds.size.w, bounds.size.h - 26));
   layer_set_update_proc(s_graph_layer, graph_update_proc);
   layer_add_child(root, s_graph_layer);
 
-  s_ring_layer = layer_create(GRect(bounds.size.w / 2 - 48, 27, 96, 96));
+  s_ring_layer = layer_create(GRect(bounds.size.w / 2 - 48, 20, 96, 96));
   layer_set_update_proc(s_ring_layer, ring_update_proc);
   layer_add_child(root, s_ring_layer);
 
-  s_score_label_layer = create_text_layer(root, GRect(60, 39, 80, 22),
+  s_score_label_layer = create_text_layer(root, GRect(60, 32, 80, 22),
                                           FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
   text_layer_set_text(s_score_label_layer, "SCORE");
-  s_score_layer = create_text_layer(root, GRect(40, 55, 120, 54),
+  s_score_layer = create_text_layer(root, GRect(40, 48, 120, 54),
                                     FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter, GColorBlack);
 
   static const char *metric_labels[METRIC_ROWS] = {"Usage", "Events", "Mask Off", "Leak"};
   for (int i = 0; i < METRIC_ROWS; i++) {
-    int y = 124 + i * 20;
-    s_metric_label_layers[i] = create_text_layer(root, GRect(12, y, 80, 21),
-                                                  FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentLeft, GColorBlack);
-    s_metric_value_layers[i] = create_text_layer(root, GRect(90, y, bounds.size.w - 102, 21),
-                                                  FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentRight, GColorBlack);
+    int y = 111 + i * 23;
+    s_metric_label_layers[i] = create_text_layer(root, GRect(8, y, 82, 28),
+                                                  FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft, GColorBlack);
+    s_metric_value_layers[i] = create_text_layer(root, GRect(82, y, bounds.size.w - 90, 28),
+                                                  FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight, GColorBlack);
     text_layer_set_text(s_metric_label_layers[i], metric_labels[i]);
   }
-  s_updated_layer = create_text_layer(root, GRect(8, 205, bounds.size.w - 16, 22),
-                                      FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
+  s_updated_layer = create_text_layer(root, GRect(8, 210, bounds.size.w - 16, 18),
+                                      FONT_KEY_GOTHIC_14, GTextAlignmentCenter, GColorBlack);
 
   s_state_title_layer = create_text_layer(root, GRect(8, 68, bounds.size.w - 16, 36),
                                           FONT_KEY_GOTHIC_28_BOLD, GTextAlignmentCenter, GColorBlack);
