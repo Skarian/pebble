@@ -66,9 +66,9 @@ database retains eight days.
 All three chart scales use the same rolling time-series view. The graph has 56
 time columns, which is the useful horizontal resolution at Pebble size. Every
 stored reading in the selected hour, day, or week contributes to its column.
-Small dots preserve meaningful minimums and maximums, while the thin line joins
-the last actual reading in each column. Spikes are not averaged away. The
-average below the chart is calculated from all readings in the window.
+Each column is the average of its readings, and a plain line joins those
+averages. The average below the chart is calculated from all readings in the
+window. The chart has no point or range markers.
 
 The first import can take a few seconds. If the sensor does not offer saved
 history, new readings still build the charts normally. Tap **Refresh now** in
@@ -137,7 +137,7 @@ Useful primary references:
 
 - Watchapp UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
 - Android package: `com.skarian.airquality`
-- Watch cache: key `4102`, version `4`
+- Watch cache: key `4102`, version `5`
 - Android database: `airquality-readings.db`
 - Notification ID/channel: `4102` / `airquality-monitor`
 - QA scratch: `/private/tmp/airquality-qa-*`

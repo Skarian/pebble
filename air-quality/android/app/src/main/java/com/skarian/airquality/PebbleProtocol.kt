@@ -5,6 +5,7 @@ import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 
 object PebbleProtocol {
     const val APP_UUID = "496e29b5-9542-430b-b75a-14dbb399b884"
+    const val PROTOCOL_VERSION = 2
 
     const val PROTOCOL = 0
     const val COMMAND = 1
@@ -47,13 +48,13 @@ object PebbleProtocol {
     const val STATUS_PARTIAL = 8
 
     fun phoneReady(): PebbleDictionary = mapOf(
-        PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(1),
+        PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(PROTOCOL_VERSION),
         COMMAND.toUInt() to PebbleDictionaryItem.UInt8(COMMAND_PHONE_READY),
     )
 
     fun status(status: Int, requestId: Int, text: String = ""): PebbleDictionary {
         val result = mutableMapOf<UInt, PebbleDictionaryItem>(
-            PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(1),
+            PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(PROTOCOL_VERSION),
             STATUS.toUInt() to PebbleDictionaryItem.UInt8(status),
             REQUEST_ID.toUInt() to PebbleDictionaryItem.UInt16(requestId),
         )
@@ -65,7 +66,7 @@ object PebbleProtocol {
         val partial = snapshot.averages.any { it == null }
         val stale = nowEpochSeconds - snapshot.current.observedAtEpochSeconds > 30 * 60
         val result = mutableMapOf<UInt, PebbleDictionaryItem>(
-            PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(1),
+            PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(PROTOCOL_VERSION),
             STATUS.toUInt() to PebbleDictionaryItem.UInt8(if (partial) STATUS_PARTIAL else STATUS_OK),
             REQUEST_ID.toUInt() to PebbleDictionaryItem.UInt16(requestId),
             OBSERVED_AT.toUInt() to PebbleDictionaryItem.UInt32(snapshot.current.observedAtEpochSeconds),
@@ -93,21 +94,14 @@ object PebbleProtocol {
     }
 
     private fun packSeries(snapshot: AirSnapshot, metric: Int): ByteArray =
-        ByteArray(GRAPH_COLUMNS * VALUES_PER_COLUMN * 2).also { bytes ->
+        ByteArray(GRAPH_COLUMNS * 2).also { bytes ->
             snapshot.columns.forEachIndexed { column, chartColumn ->
-                val band = chartColumn.metrics[metric]
-                val values = intArrayOf(
-                    band.minimum ?: PACKED_UNAVAILABLE,
-                    band.maximum ?: PACKED_UNAVAILABLE,
-                    band.last ?: PACKED_UNAVAILABLE,
-                )
-                values.forEachIndexed { valueIndex, value ->
-                    val offset = (column * VALUES_PER_COLUMN + valueIndex) * 2
-                    val packed = value.takeIf { it in Short.MIN_VALUE + 1..Short.MAX_VALUE }
-                        ?: PACKED_UNAVAILABLE
-                    bytes[offset] = (packed and 0xff).toByte()
-                    bytes[offset + 1] = (packed shr 8).toByte()
-                }
+                val value = chartColumn.metrics[metric] ?: PACKED_UNAVAILABLE
+                val packed = value.takeIf { it in Short.MIN_VALUE + 1..Short.MAX_VALUE }
+                    ?: PACKED_UNAVAILABLE
+                val offset = column * 2
+                bytes[offset] = (packed and 0xff).toByte()
+                bytes[offset + 1] = (packed shr 8).toByte()
             }
         }
 
@@ -121,6 +115,5 @@ object PebbleProtocol {
         else -> null
     }
 
-    private const val VALUES_PER_COLUMN = 3
     private const val PACKED_UNAVAILABLE = Short.MIN_VALUE.toInt()
 }

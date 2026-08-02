@@ -1,5 +1,7 @@
 package com.skarian.airquality
 
+import kotlin.math.roundToInt
+
 const val UNAVAILABLE: Int = Int.MIN_VALUE
 const val GRAPH_COLUMNS: Int = 56
 const val METRIC_COUNT: Int = 4
@@ -26,13 +28,7 @@ enum class ChartScale(val wireValue: Int, val windowSeconds: Long) {
     }
 }
 
-data class MetricBand(
-    val minimum: Int?,
-    val maximum: Int?,
-    val last: Int?,
-)
-
-data class ChartColumn(val metrics: List<MetricBand>)
+data class ChartColumn(val metrics: List<Int?>)
 
 data class AirSnapshot(
     val location: String,
@@ -56,9 +52,8 @@ object SnapshotAggregator {
             .filter { it.observedAtEpochSeconds in windowStart..nowEpochSeconds }
             .sortedBy { it.observedAtEpochSeconds }
             .toList()
-        val minimums = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
-        val maximums = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
-        val lasts = Array(METRIC_COUNT) { arrayOfNulls<Int>(GRAPH_COLUMNS) }
+        val columnTotals = Array(METRIC_COUNT) { LongArray(GRAPH_COLUMNS) }
+        val columnCounts = Array(METRIC_COUNT) { IntArray(GRAPH_COLUMNS) }
         val totals = LongArray(METRIC_COUNT)
         val counts = IntArray(METRIC_COUNT)
 
@@ -69,9 +64,8 @@ object SnapshotAggregator {
             repeat(METRIC_COUNT) { metric ->
                 val value = metricValue(reading, metric)
                 if (value == UNAVAILABLE) return@repeat
-                minimums[metric][column] = minimums[metric][column]?.let { minOf(it, value) } ?: value
-                maximums[metric][column] = maximums[metric][column]?.let { maxOf(it, value) } ?: value
-                lasts[metric][column] = value
+                columnTotals[metric][column] += value
+                columnCounts[metric][column] += 1
                 totals[metric] += value
                 counts[metric] += 1
             }
@@ -79,15 +73,12 @@ object SnapshotAggregator {
 
         val columns = (0 until GRAPH_COLUMNS).map { column ->
             ChartColumn((0 until METRIC_COUNT).map { metric ->
-                MetricBand(
-                    minimum = minimums[metric][column],
-                    maximum = maximums[metric][column],
-                    last = lasts[metric][column],
-                )
+                val count = columnCounts[metric][column]
+                if (count == 0) null else (columnTotals[metric][column].toDouble() / count).roundToInt()
             })
         }
         val averages = (0 until METRIC_COUNT).map { metric ->
-            if (counts[metric] == 0) null else (totals[metric] / counts[metric]).toInt()
+            if (counts[metric] == 0) null else (totals[metric].toDouble() / counts[metric]).roundToInt()
         }
         return AirSnapshot(
             location = location.trim().ifEmpty { "ARANET4" }.take(31),

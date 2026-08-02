@@ -3,12 +3,12 @@
 
 #define METRICS 4
 #define GRAPH_COLUMNS 56
-#define VALUES_PER_COLUMN 3
 #define PAGE_COUNT 5
-#define CACHE_VERSION 4
+#define CACHE_VERSION 5
 #define PERSIST_KEY_CACHE 4102
 #define UNAVAILABLE INT32_MIN
 #define RESPONSE_TIMEOUT_MS 30000
+#define PROTOCOL_VERSION 2
 
 enum { COMMAND_FETCH = 1, COMMAND_PHONE_READY = 2, COMMAND_SCALE = 3 };
 enum { SCALE_HOUR = 0, SCALE_DAY = 1, SCALE_WEEK = 2, SCALE_COUNT = 3 };
@@ -31,7 +31,7 @@ typedef struct {
   char location[32];
   int32_t current[METRICS];
   int32_t average[METRICS];
-  int16_t series[METRICS][GRAPH_COLUMNS][VALUES_PER_COLUMN];
+  int16_t series[METRICS][GRAPH_COLUMNS];
 } AirCache;
 
 static Window *s_window;
@@ -208,11 +208,10 @@ static void draw_current(GContext *ctx, GRect bounds) {
 static void graph_range(int metric, int32_t *minimum, int32_t *maximum) {
   int32_t low = INT32_MAX, high = INT32_MIN;
   for (int column = 0; column < GRAPH_COLUMNS; column++) {
-    int16_t column_low = s_cache.series[metric][column][0];
-    int16_t column_high = s_cache.series[metric][column][1];
-    if (column_low == INT16_MIN || column_high == INT16_MIN) continue;
-    if (column_low < low) low = column_low;
-    if (column_high > high) high = column_high;
+    int16_t value = s_cache.series[metric][column];
+    if (value == INT16_MIN) continue;
+    if (value < low) low = value;
+    if (value > high) high = value;
   }
   if (low == INT32_MAX) { *minimum = 0; *maximum = 1; return; }
   const int32_t steps[] = {100, 10, 20, 10};
@@ -261,30 +260,17 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_draw_line(ctx, GPoint(left, top), GPoint(right, top));
   graphics_draw_line(ctx, GPoint(left, bottom), GPoint(right, bottom));
-  int available = 0;
-  for (int column = 0; column < GRAPH_COLUMNS; column++)
-    if (s_cache.series[metric][column][2] != INT16_MIN) available++;
   GPoint previous = GPointZero;
   bool has_previous = false;
   int previous_column = -GRAPH_COLUMNS;
   int connect_gap = s_scale == SCALE_HOUR ? 6 : 2;
   for (int column = 0; column < GRAPH_COLUMNS; column++) {
-    int16_t low = s_cache.series[metric][column][0];
-    int16_t high = s_cache.series[metric][column][1];
-    int16_t last = s_cache.series[metric][column][2];
+    int16_t value = s_cache.series[metric][column];
     int x = left + (column * (right - left)) / (GRAPH_COLUMNS - 1);
-    if (last != INT16_MIN) {
-      int low_y = graph_y(low, minimum, maximum, top, bottom);
-      int high_y = graph_y(high, minimum, maximum, top, bottom);
-      int last_y = graph_y(last, minimum, maximum, top, bottom);
-      GPoint point = GPoint(x, last_y);
+    if (value != INT16_MIN) {
+      GPoint point = GPoint(x, graph_y(value, minimum, maximum, top, bottom));
       if (has_previous && column - previous_column <= connect_gap)
         graphics_draw_line(ctx, previous, point);
-      if (abs(high_y - last_y) >= 3)
-        graphics_fill_circle(ctx, GPoint(x, high_y), 1);
-      if (low_y != high_y && abs(low_y - last_y) >= 3)
-        graphics_fill_circle(ctx, GPoint(x, low_y), 1);
-      graphics_fill_circle(ctx, point, available <= 20 ? 2 : 1);
       previous = point;
       has_previous = true;
       previous_column = column;
@@ -341,7 +327,7 @@ static void request_data(uint8_t command) {
   }
   s_request_id++;
   s_request_command = command;
-  dict_write_uint8(iter, MESSAGE_KEY_PROTOCOL, 1);
+  dict_write_uint8(iter, MESSAGE_KEY_PROTOCOL, PROTOCOL_VERSION);
   dict_write_uint8(iter, MESSAGE_KEY_COMMAND, command);
   dict_write_uint16(iter, MESSAGE_KEY_REQUEST_ID, s_request_id);
   dict_write_uint8(iter, MESSAGE_KEY_SCALE,
@@ -366,7 +352,7 @@ static int32_t tuple_i32(DictionaryIterator *iter, uint32_t key, int32_t fallbac
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
   Tuple *protocol = dict_find(iter, MESSAGE_KEY_PROTOCOL);
-  if (!protocol || protocol->value->uint8 != 1) return;
+  if (!protocol || protocol->value->uint8 != PROTOCOL_VERSION) return;
   Tuple *command = dict_find(iter, MESSAGE_KEY_COMMAND);
   if (command && command->value->uint8 == COMMAND_PHONE_READY) {
     if (s_loading) {
@@ -425,17 +411,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       next.current[metric] = tuple_i32(iter, current_keys[metric], UNAVAILABLE);
       next.average[metric] = tuple_i32(iter, average_keys[metric], UNAVAILABLE);
       Tuple *series = dict_find(iter, series_keys[metric]);
-      if (!series || series->length < GRAPH_COLUMNS * VALUES_PER_COLUMN * 2) {
+      if (!series || series->length != GRAPH_COLUMNS * 2) {
         chart_valid = false;
         continue;
       }
       const uint8_t *bytes = series->value->data;
       for (int column = 0; column < GRAPH_COLUMNS; column++) {
-        for (int value = 0; value < VALUES_PER_COLUMN; value++) {
-          int offset = (column * VALUES_PER_COLUMN + value) * 2;
-          uint16_t raw = (uint16_t)bytes[offset] | ((uint16_t)bytes[offset + 1] << 8);
-          next.series[metric][column][value] = (int16_t)raw;
-        }
+        int offset = column * 2;
+        uint16_t raw = (uint16_t)bytes[offset] | ((uint16_t)bytes[offset + 1] << 8);
+        next.series[metric][column] = (int16_t)raw;
       }
     }
     if (!chart_valid) {

@@ -3,7 +3,6 @@
 // External QA produces the same packed chart contract as the Android companion.
 // This file is not bundled in the production PBW.
 var GRAPH_COLUMNS = 56;
-var VALUES_PER_COLUMN = 3;
 var UNAVAILABLE = -2147483648;
 var PACKED_UNAVAILABLE = -32768;
 var METRICS = ['co2', 'temperature', 'humidity', 'pressure'];
@@ -32,27 +31,19 @@ function normalize(reading) {
   };
 }
 
-function normalizeBand(point, name) {
-  var normalized = normalize(point);
-  var value = normalized[name];
-  if (value === UNAVAILABLE) return [PACKED_UNAVAILABLE, PACKED_UNAVAILABLE, PACKED_UNAVAILABLE];
-  var lowInput = point && point[name + 'Min'];
-  var highInput = point && point[name + 'Max'];
-  var low = finite(lowInput) ? normalize(Object.assign({}, point, {[name]: lowInput}))[name] : value;
-  var high = finite(highInput) ? normalize(Object.assign({}, point, {[name]: highInput}))[name] : value;
-  return [Math.min(low, value), Math.max(high, value), value];
-}
-
 function chartColumns(points) {
   var input = points || [];
   return Array.from({length: GRAPH_COLUMNS}, function (_, index) {
     var point = input[index];
-    return METRICS.map(function (name) { return normalizeBand(point, name); });
+    var values = normalize(point);
+    return METRICS.map(function (name) {
+      return values[name] === UNAVAILABLE ? PACKED_UNAVAILABLE : values[name];
+    });
   });
 }
 
 function average(columns, metric) {
-  var values = columns.map(function (column) { return column[metric][2]; })
+  var values = columns.map(function (column) { return column[metric]; })
     .filter(function (value) { return value !== PACKED_UNAVAILABLE; });
   if (!values.length) return UNAVAILABLE;
   return Math.round(values.reduce(function (total, value) { return total + value; }, 0) / values.length);
@@ -61,10 +52,9 @@ function average(columns, metric) {
 function packSeries(columns, metric) {
   var bytes = [];
   columns.forEach(function (column) {
-    column[metric].forEach(function (value) {
-      var packed = value >= -32767 && value <= 32767 ? value : PACKED_UNAVAILABLE;
-      bytes.push(packed & 255, (packed >> 8) & 255);
-    });
+    var value = column[metric];
+    var packed = value >= -32767 && value <= 32767 ? value : PACKED_UNAVAILABLE;
+    bytes.push(packed & 255, (packed >> 8) & 255);
   });
   return bytes;
 }
@@ -89,7 +79,7 @@ function dictionary(snapshot, observedAt, requestId, requestedScale) {
   var columns = chartColumns(snapshot.points);
   var windows = [3600, 86400, 604800];
   var result = {
-    PROTOCOL: 1,
+    PROTOCOL: 2,
     STATUS: isPartial(snapshot.current, columns) ? 8 : 0,
     OBSERVED_AT: Math.floor(observedAt / 1000),
     FLAGS: snapshot.stale ? 1 : 0,
@@ -117,7 +107,7 @@ function dictionary(snapshot, observedAt, requestId, requestedScale) {
   return result;
 }
 
-module.exports = {GRAPH_COLUMNS: GRAPH_COLUMNS, VALUES_PER_COLUMN: VALUES_PER_COLUMN,
+module.exports = {GRAPH_COLUMNS: GRAPH_COLUMNS,
   UNAVAILABLE: UNAVAILABLE, PACKED_UNAVAILABLE: PACKED_UNAVAILABLE, METRICS: METRICS,
   normalize: normalize, chartColumns: chartColumns, packSeries: packSeries,
   isPartial: isPartial, co2State: co2State, dictionary: dictionary};

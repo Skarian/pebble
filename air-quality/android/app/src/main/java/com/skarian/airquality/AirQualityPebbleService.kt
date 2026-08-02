@@ -27,6 +27,9 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         watch: WatchIdentifier,
     ): ReceiveResult {
         if (watchappUUID != appUuid) return ReceiveResult.Nack
+        if (PebbleProtocol.number(data, PebbleProtocol.PROTOCOL) != PebbleProtocol.PROTOCOL_VERSION) {
+            return ReceiveResult.Nack
+        }
         val command = PebbleProtocol.number(data, PebbleProtocol.COMMAND)
         if (command != PebbleProtocol.COMMAND_FETCH && command != PebbleProtocol.COMMAND_SCALE) {
             return ReceiveResult.Ack

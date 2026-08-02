@@ -125,7 +125,7 @@ function encode(dictionary) {
 }
 
 function status(statusCode, requestId, text) {
-  return encode({PROTOCOL: 1, STATUS: statusCode, REQUEST_ID: requestId, ERROR_TEXT: text || ''});
+  return encode({PROTOCOL: 2, STATUS: statusCode, REQUEST_ID: requestId, ERROR_TEXT: text || ''});
 }
 
 function snapshot(co2, options = {}) {
@@ -153,24 +153,14 @@ function snapshot(co2, options = {}) {
     const offset = wave * 80 + occupied + weekend;
     return {
       co2: Math.max(420, Math.round(co2 - 45 + offset + spike)),
-      co2Min: Math.max(400, Math.round(co2 - 58 + offset)),
-      co2Max: Math.round(co2 - 32 + offset + spike),
       temperature: base.temperature - 0.7 + wave * 0.8,
-      temperatureMin: base.temperature - 0.9 + wave * 0.8,
-      temperatureMax: base.temperature - 0.5 + wave * 0.8,
       humidity: base.humidity + 1.4 - wave * 2.1,
-      humidityMin: base.humidity + 0.8 - wave * 2.1,
-      humidityMax: base.humidity + 2.0 - wave * 2.1,
       pressure: base.pressure + wave * 2.3,
-      pressureMin: base.pressure - 0.4 + wave * 2.3,
-      pressureMax: base.pressure + 0.4 + wave * 2.3,
     };
   });
   if (options.missingMetric) {
     delete base.pressure;
-    points.forEach((row) => {
-      delete row.pressure; delete row.pressureMin; delete row.pressureMax;
-    });
+    points.forEach((row) => delete row.pressure);
   }
   if (options.missingHistory) points.splice(0, points.length);
   return {location: 'HOME', current: base, points, scale,

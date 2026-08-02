@@ -11,15 +11,14 @@ test('normalizes the four real Aranet4 metrics', () => {
   assert.equal(model.normalize({temperature: -5.2}).temperature, -52);
 });
 
-test('packs screen-resolution min max and last values without averaging peaks', () => {
+test('packs one averaged value for each screen column', () => {
   const points = Array.from({length: model.GRAPH_COLUMNS}, () => ({co2: 700}));
-  points[0] = {co2: 700, co2Min: 500, co2Max: 1200};
   const columns = model.chartColumns(points);
   assert.equal(columns.length, 56);
-  assert.deepEqual(columns[0][0], [500, 1200, 700]);
+  assert.equal(columns[0][0], 700);
   const bytes = model.packSeries(columns, 0);
-  assert.equal(bytes.length, 336);
-  assert.deepEqual(bytes.slice(0, 6), [244, 1, 176, 4, 188, 2]);
+  assert.equal(bytes.length, 112);
+  assert.deepEqual(bytes.slice(0, 2), [188, 2]);
 });
 
 test('uses supplied Aranet state and default thresholds only as fallback', () => {
@@ -32,11 +31,12 @@ test('uses supplied Aranet state and default thresholds only as fallback', () =>
 test('dictionary marks incomplete history without adding provider credentials', () => {
   const message = model.dictionary({location: 'Home', current: {co2: 612}}, Date.UTC(2026, 7, 2), 9);
   assert.equal(message.STATUS, 8);
+  assert.equal(message.PROTOCOL, 2);
   assert.equal(message.LOCATION, 'Home');
   assert.equal(message.REQUEST_ID, 9);
   assert.equal(message.CO2, 612);
   assert.equal(message.AVG_PRESSURE_X10, model.UNAVAILABLE);
   assert.equal(message.POINT_COUNT, 56);
-  assert.equal(message.SERIES_CO2.length, 336);
+  assert.equal(message.SERIES_CO2.length, 112);
   assert.equal(message.SCALE, 0);
 });
