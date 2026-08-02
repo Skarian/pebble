@@ -44,6 +44,15 @@ test('headers and update footer follow the plain CPAP layout', () => {
   assert.match(watch, /Updated %lud ago/);
 });
 
+test('current AQI uses one label and native watch-safe faces', () => {
+  assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "AQI"\)/);
+  assert.match(watch, /draw_face\(ctx, s_cache\.current\[0\]\)/);
+  assert.match(watch, /aqi <= 50/);
+  assert.match(watch, /aqi == UNAVAILABLE \|\| aqi <= 150/);
+  assert.doesNotMatch(watch, /"HEALTHY"|"MODERATE"|"ELEVATED"|"UNHEALTHY"|"HAZARDOUS"/);
+  assert.doesNotMatch(watch, /draw_text\(ctx, "AQI"/);
+});
+
 test('secrets remain phone-only and production has no QA or loopback route', () => {
   assert.match(phone, /airquality\.settings\.v1/);
   assert.match(phone, /API key stays on your phone/);

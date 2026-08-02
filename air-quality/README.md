@@ -4,6 +4,10 @@ AirQuality is an Emery/Pebble Time 2 watchapp for one Aranet Cloud sensor. It
 shows the current US AQI, PM2.5, CO2, temperature, and humidity, followed by a
 seven-day graph for each value.
 
+The current page uses a simple face for the AQI range: a smile for 0–50, a
+neutral face for 51–150, and a sad face above 150. The numeric AQI remains the
+primary value; the face is only a quick visual summary.
+
 - Open the app to show the last saved reading and refresh it.
 - Press **Down** or **Up** to move through the current page and five graphs.
   The list stops at each end.

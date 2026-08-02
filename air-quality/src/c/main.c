@@ -50,13 +50,28 @@ static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
                      align, NULL);
 }
 
-static const char *category(uint16_t aqi) {
-  if (aqi == UNAVAILABLE) return "NO AQI";
-  if (aqi <= 50) return "HEALTHY";
-  if (aqi <= 100) return "MODERATE";
-  if (aqi <= 150) return "ELEVATED";
-  if (aqi <= 300) return "UNHEALTHY";
-  return "HAZARDOUS";
+static void draw_face(GContext *ctx, uint16_t aqi) {
+  const GPoint center = GPoint(49, 65);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_circle(ctx, center, 25);
+  graphics_fill_circle(ctx, GPoint(41, 58), 2);
+  graphics_fill_circle(ctx, GPoint(57, 58), 2);
+  if (aqi != UNAVAILABLE && aqi <= 50) {
+    graphics_draw_line(ctx, GPoint(39, 67), GPoint(44, 72));
+    graphics_draw_line(ctx, GPoint(44, 72), GPoint(49, 74));
+    graphics_draw_line(ctx, GPoint(49, 74), GPoint(54, 72));
+    graphics_draw_line(ctx, GPoint(54, 72), GPoint(59, 67));
+  } else if (aqi == UNAVAILABLE || aqi <= 150) {
+    graphics_draw_line(ctx, GPoint(39, 70), GPoint(59, 70));
+  } else {
+    graphics_draw_line(ctx, GPoint(39, 74), GPoint(44, 69));
+    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, 67));
+    graphics_draw_line(ctx, GPoint(49, 67), GPoint(54, 69));
+    graphics_draw_line(ctx, GPoint(54, 69), GPoint(59, 74));
+  }
+  graphics_context_set_stroke_width(ctx, 1);
 }
 
 static void format_metric(char *buffer, size_t size, int metric, uint16_t value) {
@@ -129,10 +144,7 @@ static void draw_current(GContext *ctx, GRect bounds) {
   draw_header(ctx, bounds, s_cache.location, "AQI");
   if (s_cache.current[0] == UNAVAILABLE) snprintf(primary, sizeof(primary), "--");
   else snprintf(primary, sizeof(primary), "%u", s_cache.current[0]);
-  draw_text(ctx, category(s_cache.current[0]), fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 42, 112, 30), GTextAlignmentLeft, GColorBlack);
-  draw_text(ctx, "AQI", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-            GRect(8, 69, 42, 22), GTextAlignmentLeft, GColorBlack);
+  draw_face(ctx, s_cache.current[0]);
   draw_text(ctx, primary, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
             GRect(118, 39, bounds.size.w - 126, 54), GTextAlignmentRight, GColorBlack);
   graphics_context_set_stroke_color(ctx, GColorBlack);
