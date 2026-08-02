@@ -6,6 +6,15 @@ chart screens cover the last hour, day, or week.
 
 <img src="screenshots/air-quality.png" width="200" alt="AirQuality showing a current Aranet4 reading on Pebble">
 
+## Screens
+
+These fake-data screens show the current reading and the one-day view for each
+chart.
+
+| Current | CO2 | Temperature | Humidity | Pressure |
+| :---: | :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/current.png" width="150" alt="Current air quality reading"> | <img src="docs/screenshots/co2-chart.png" width="150" alt="One-day CO2 chart"> | <img src="docs/screenshots/temperature-chart.png" width="150" alt="One-day temperature chart"> | <img src="docs/screenshots/humidity-chart.png" width="150" alt="One-day humidity chart"> | <img src="docs/screenshots/pressure-chart.png" width="150" alt="One-day pressure chart"> |
+
 ## Using the watch app
 
 - Open AirQuality to refresh the current reading.

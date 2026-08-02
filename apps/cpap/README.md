@@ -6,6 +6,15 @@ make it easy to spot changes across the week.
 
 <img src="docs/cpap.png" width="200" alt="CPAP showing a nightly myAir score on Pebble">
 
+## Screens
+
+These fake-data screens show a nightly result and each of the four weekly
+graphs.
+
+| Nightly score | Score | Usage | Events | Leak |
+| :---: | :---: | :---: | :---: | :---: |
+| <img src="docs/gallery/nightly-score.png" width="150" alt="Nightly CPAP score"> | <img src="docs/gallery/score-chart.png" width="150" alt="Weekly CPAP score graph"> | <img src="docs/gallery/usage-chart.png" width="150" alt="Weekly CPAP usage graph"> | <img src="docs/gallery/events-chart.png" width="150" alt="Weekly CPAP events graph"> | <img src="docs/gallery/leak-chart.png" width="150" alt="Weekly CPAP leak graph"> |
+
 ## Using the watch app
 
 - Open CPAP to see the most recent saved score.
