@@ -1,8 +1,8 @@
 # Hubitat for Pebble
 
 Hubitat is an Emery/Pebble Time 2 watchapp for checking a few sensors and
-devices at a glance. It can also turn selected switches on or off and lock or
-unlock selected locks.
+devices at a glance. It can also turn authorized switches on or off and lock or
+unlock authorized locks. This build is configured for Neil's Maker API instance.
 
 - Press **Up** or **Down** to move through Overview, device, detail, and control
   pages. The list stops at both ends.
@@ -26,31 +26,30 @@ data is received; press **Select** there whenever you want a new reading.
 In Hubitat:
 
 1. Open **Apps** and add the built-in **Maker API** app.
-2. Authorize only the devices this watchapp should read or control.
+2. Authorize only the devices this watchapp should read or control. The watch
+   shows the first six authorized devices.
 3. Enable the local endpoint, cloud endpoint, or both as appropriate and press
    **Update**.
-4. Copy the displayed endpoint root and access token. Maker API tokens are
+4. Copy the displayed access token. Maker API tokens are
    authorization credentials; reset the token in Hubitat if it is exposed.
-5. Note the numeric IDs from Maker API's authorized-device list.
 
-In the Pebble mobile app, open Hubitat **Settings** and enter:
+This PBW already contains the token-free cloud API root supplied for this
+Hubitat Maker API app. In the Pebble mobile app, open Hubitat **Settings** and
+enter its only setting:
 
-- **Maker API URL**: the instance root, for example
-  `http://192.168.1.20/apps/api/123` or the equivalent Hubitat cloud API root.
-  Do not include `/devices`, a trailing slash, or `?access_token=...`.
 - **Access token**: the token displayed by that same Maker API instance.
-- **Device IDs**: up to six comma-separated numeric IDs, such as
-  `17, 42, 108`. Every ID must be authorized in that Maker API instance.
 
 Save Settings, return to the watch, and press **Select** to sync. Saving never
 starts a background read.
 
 The phone connects directly to Maker API; no companion app or production
-bridge is required. The URL, token, and selected IDs live in this app's private PebbleKit JS
-`localStorage` on the phone. PebbleKit JS does not expose the OS keychain. The
-watch receives normalized device data and selected numeric IDs, but never the
-Maker API URL or access token. Sanitized durable diagnostics retain only error
-type/status/message and never retain a URL, token, device ID, or device value.
+bridge is required. The access token lives in this app's private PebbleKit JS
+`localStorage` on the phone; PebbleKit JS does not expose the OS keychain. The
+phone also remembers which device IDs were returned by the latest successful
+refresh so it cannot control an arbitrary ID. The watch receives normalized
+device data, but never the Maker API URL or access token. Sanitized durable
+diagnostics retain only error type/status/message and never retain a URL,
+token, device ID, or device value.
 
 Maker API uses HTTP GET for reads and commands. This implementation reads
 `/devices/all` and invokes only the four-command allowlist above at
@@ -81,7 +80,7 @@ fixtures, QA modes, scenario names, or test navigation.
 
 The board covers setup, loading with and without cache, overview, motion,
 contact, temperature, battery, switch, lock, detail, safe control, dangerous
-confirmation, empty selection, missing and partial data, auth, phone/network,
+confirmation, empty authorization, missing and partial data, auth, phone/network,
 timeout, service, and command pending/success/failure. It also verifies that an
 old timestamp does not add a stale-data screen or change the Overview.
 
@@ -130,6 +129,7 @@ connected physical watch with the normal Pebble CLI workflow.
 | Watch cache header | persist key `7300` |
 | Watch device slots | persist keys `7310`–`7315` |
 | Phone settings | `hubitat.settings.v1` |
+| Phone authorized devices | `hubitat.authorized.v1` |
 | Phone diagnostics | `hubitat.diagnostics.v1` |
 | Flash backup prefix | `emery.hubitat-qa-backup-*` |
 | QA output | `hubitat/qa-results/all-screens-*-*/` |

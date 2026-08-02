@@ -237,7 +237,7 @@ export async function main() {
     captured.push(await captureState(outputDir, session, 'setup', 'SETUP REQUIRED', [],
       statusMessage(1, 'Open Hubitat settings')));
     await inject(session, scratch, snapshotMessages([], {partial: true}), 'empty');
-    captured.push(await captureState(outputDir, session, 'empty', 'EMPTY DEVICE SELECTION'));
+    captured.push(await captureState(outputDir, session, 'empty', 'NO AUTHORIZED DEVICES'));
 
     for (const item of matrix.errors) captured.push(await captureState(
       outputDir, session, item.name, item.label, [], statusMessage(item.status, item.text)));

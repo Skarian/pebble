@@ -20,12 +20,17 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /persist_cache\(\);\n      s_status = STATUS_OK/);
 });
 
-test('phone owns secrets and permits only selected-device control actions', () => {
+test('phone owns the one secret and permits controls only after an authorized refresh', () => {
   assert.match(phone, /localStorage\.setItem\(SETTINGS_KEY/);
-  assert.match(phone, /Device is not selected/);
+  assert.match(phone, /localStorage\.setItem\(AUTHORIZED_IDS_KEY/);
+  assert.match(phone, /readAuthorizedIds\(\)\.indexOf\(deviceId\) === -1/);
+  assert.match(phone, /Refresh devices first/);
   assert.doesNotMatch(watch, /access_token|baseUrl|token/);
   assert.match(phone, /After saving, press Select on the watch to sync/);
   assert.doesNotMatch(phone, /Save and refresh|localStorage\.setItem\(SETTINGS_KEY[^}]+refresh\(1\)/s);
+  assert.match(phone, /<label for="token">Access token<\/label>/);
+  assert.doesNotMatch(phone, /<label for="url">|<label for="ids">/);
+  assert.match(phone, /Model\.normalizeDevices\(response, \[\]\)/);
 });
 
 test('QA owns the shared emulator lock and never issues global emulator kills', () => {

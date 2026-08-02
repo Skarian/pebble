@@ -50,7 +50,6 @@ static TextLayer *s_primary_layer;
 static TextLayer *s_secondary_layer;
 static TextLayer *s_meta_layer;
 static TextLayer *s_footer_layer;
-static Layer *s_rules_layer;
 static AppTimer *s_response_timer;
 
 static CacheHeader s_header;
@@ -61,7 +60,6 @@ static bool s_has_cache;
 static bool s_staging_active;
 static bool s_loading;
 static bool s_confirming;
-static bool s_show_overview;
 static uint8_t s_status;
 static uint8_t s_page_index;
 static uint8_t s_command_device_index;
@@ -234,14 +232,6 @@ static void send_control(uint8_t device_index) {
   render();
 }
 
-static void rules_update_proc(Layer *layer, GContext *ctx) {
-  if (!s_show_overview) return;
-  GRect bounds = layer_get_bounds(layer);
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_circle(ctx, GPoint(bounds.size.w / 2, 68), 47);
-}
-
 static void set_text(const char *page, const char *label, const char *primary,
                      const char *secondary, const char *meta, const char *footer) {
   text_layer_set_text(s_page_layer, page);
@@ -252,43 +242,44 @@ static void set_text(const char *page, const char *label, const char *primary,
   text_layer_set_text(s_footer_layer, footer);
 }
 
-static void configure_data_layout(void) {
-  s_show_overview = false;
-  layer_mark_dirty(s_rules_layer);
-  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 52, 184, 36));
+static void configure_data_layout(bool has_secondary, bool has_meta, bool has_footer) {
+  const int content_top = 28;
+  const int content_bottom = has_footer ? 204 : 228;
+  const int total_height = 36 + 52 + (has_secondary ? 30 : 0) + (has_meta ? 26 : 0);
+  int y = content_top + (content_bottom - content_top - total_height) / 2;
+  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, y, 184, 36));
   text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 88, 184, 52));
+  y += 36;
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, y, 184, 52));
   text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 142, 184, 30));
+  y += 52;
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, y, 184, has_secondary ? 30 : 1));
   text_layer_set_font(s_secondary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 174, 184, 26));
+  if (has_secondary) y += 30;
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, y, 184, has_meta ? 26 : 1));
   text_layer_set_font(s_meta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 204, 186, 22));
   text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
 }
 
 static void configure_overview_layout(void) {
-  s_show_overview = true;
-  layer_mark_dirty(s_rules_layer);
-  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 30, 184, 24));
+  layer_set_frame(text_layer_get_layer(s_label_layer), GRect(8, 47, 184, 22));
   text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_overflow_mode(s_label_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 48, 184, 54));
+  layer_set_frame(text_layer_get_layer(s_primary_layer), GRect(8, 65, 184, 54));
   text_layer_set_font(s_primary_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeTrailingEllipsis);
-  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 116, 184, 30));
+  layer_set_frame(text_layer_get_layer(s_secondary_layer), GRect(8, 130, 184, 30));
   text_layer_set_font(s_secondary_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 146, 184, 30));
+  layer_set_frame(text_layer_get_layer(s_meta_layer), GRect(8, 160, 184, 30));
   text_layer_set_font(s_meta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 210, 186, 18));
   text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
 }
 
 static void configure_state_layout(bool title_only) {
-  s_show_overview = false;
-  layer_mark_dirty(s_rules_layer);
   layer_set_frame(text_layer_get_layer(s_label_layer),
                   GRect(8, title_only ? 92 : 68, 184, 36));
   text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
@@ -318,7 +309,7 @@ static void render(void) {
     return;
   }
   if (s_status == STATUS_COMMAND_FAILURE) {
-    configure_data_layout();
+    configure_data_layout(true, false, true);
     DeviceState *device = &s_devices[s_command_device_index];
     set_text("ERROR", device->label, action_label(s_action), "SELECT TO RETRY", "",
              "UP / DOWN TO RETURN");
@@ -326,16 +317,16 @@ static void render(void) {
   }
   if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
     const char *title = s_status == STATUS_SETUP ? "SETUP REQUIRED" : "ERROR";
-    const char *body = s_status == STATUS_SETUP ? "Open settings in\nthe Pebble app" :
-      s_status == STATUS_AUTH ? "Open settings\nto reconnect" :
+    const char *body = s_status == STATUS_SETUP ? "Go to Hubitat settings\nin the Pebble app" :
+      s_status == STATUS_AUTH ? "Open Hubitat settings\nto reconnect" :
       s_status == STATUS_NETWORK ? "Phone cannot be reached" :
       s_status == STATUS_TIMEOUT ? "Hubitat timed out" : "Hubitat is unavailable";
-    const char *footer_text = s_status == STATUS_SETUP ? "PHONE SETUP REQUIRED" : "PRESS SELECT TO RETRY";
+    const char *footer_text = s_status == STATUS_SETUP ? "ACCESS TOKEN REQUIRED" : "PRESS SELECT TO RETRY";
     render_state(title, body, footer_text);
     return;
   }
   if (!s_has_cache || s_header.count == 0) {
-    render_state("NO DEVICES", "Choose devices in\nthe Pebble app", "OPEN PHONE SETTINGS");
+    render_state("NO DEVICES", "Authorize devices\nin Maker API", "PRESS SELECT TO RETRY");
     return;
   }
 
@@ -354,23 +345,25 @@ static void render(void) {
     return;
   }
 
-  configure_data_layout();
   uint8_t device_index = 0, page_type = 0;
   if (!decode_page(s_page_index, &device_index, &page_type)) return;
   DeviceState *device = &s_devices[device_index];
   if (page_type == PAGE_STATUS) {
     snprintf(meta, sizeof(meta), "%s", device->secondary);
     snprintf(footer, sizeof(footer), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
+    configure_data_layout(meta[0] != '\0', false, true);
     set_text(device->kind <= KIND_TEMPERATURE ? "SENSOR" : "DEVICE", device->label,
              device->primary[0] ? device->primary : "MISSING", meta, "", footer);
   } else if (page_type == PAGE_DETAIL) {
     snprintf(secondary, sizeof(secondary), "%s", kind_name(device->kind));
     if (device->battery == 255) snprintf(meta, sizeof(meta), "BATTERY --");
     else snprintf(meta, sizeof(meta), "BATTERY %u%%", device->battery);
+    configure_data_layout(true, false, false);
     set_text("DETAIL", device->label, secondary, meta, "", "");
   } else {
     const char *action = desired_action(device);
     snprintf(secondary, sizeof(secondary), "%s", action_label(action));
+    configure_data_layout(false, false, true);
     if (device->kind == KIND_LOCK && s_confirming) {
       set_text("CONFIRM", device->label, secondary, "", "", "PRESS SELECT AGAIN");
     } else if (device->kind == KIND_LOCK) {
@@ -547,9 +540,6 @@ static TextLayer *make_text(Layer *parent, GRect frame, const char *font,
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
-  s_rules_layer = layer_create(bounds);
-  layer_set_update_proc(s_rules_layer, rules_update_proc);
-  layer_add_child(root, s_rules_layer);
   s_brand_layer = make_text(root, GRect(7, 0, 100, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
   s_page_layer = make_text(root, GRect(106, 0, bounds.size.w - 113, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
   s_label_layer = make_text(root, GRect(8, 36, bounds.size.w - 16, 32), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
@@ -566,7 +556,7 @@ static void window_unload(Window *window) {
   text_layer_destroy(s_brand_layer); text_layer_destroy(s_page_layer);
   text_layer_destroy(s_label_layer); text_layer_destroy(s_primary_layer);
   text_layer_destroy(s_secondary_layer); text_layer_destroy(s_meta_layer);
-  text_layer_destroy(s_footer_layer); layer_destroy(s_rules_layer);
+  text_layer_destroy(s_footer_layer);
 }
 
 static void load_cache(void) {
