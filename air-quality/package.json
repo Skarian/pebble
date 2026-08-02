@@ -1,7 +1,7 @@
 {
   "name": "air-quality",
   "author": "Neil Skaria",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "keywords": ["pebble-app", "air-quality"],
   "private": true,
   "dependencies": {},
@@ -29,6 +29,7 @@
       "OBSERVED_AT": 4, "FLAGS": 5, "LOCATION": 6, "ERROR_TEXT": 7,
       "CO2_STATE": 8, "BATTERY": 9,
       "CO2": 10, "TEMP_X10": 11, "HUMIDITY_X10": 12, "PRESSURE_X10": 13,
+      "SCALE": 14,
       "DAY0_DATE": 20, "DAY0_CO2": 21, "DAY0_TEMP_X10": 22, "DAY0_HUMIDITY_X10": 23, "DAY0_PRESSURE_X10": 24,
       "DAY1_DATE": 25, "DAY1_CO2": 26, "DAY1_TEMP_X10": 27, "DAY1_HUMIDITY_X10": 28, "DAY1_PRESSURE_X10": 29,
       "DAY2_DATE": 30, "DAY2_CO2": 31, "DAY2_TEMP_X10": 32, "DAY2_HUMIDITY_X10": 33, "DAY2_PRESSURE_X10": 34,

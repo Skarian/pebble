@@ -20,9 +20,11 @@ object PebbleProtocol {
     const val TEMP_X10 = 11
     const val HUMIDITY_X10 = 12
     const val PRESSURE_X10 = 13
+    const val SCALE = 14
 
     const val COMMAND_FETCH = 1
     const val COMMAND_PHONE_READY = 2
+    const val COMMAND_SCALE = 3
 
     const val STATUS_OK = 0
     const val STATUS_SETUP = 1
@@ -50,7 +52,7 @@ object PebbleProtocol {
     }
 
     fun snapshot(snapshot: AirSnapshot, requestId: Int, nowEpochSeconds: Long): PebbleDictionary {
-        val partial = snapshot.days.any {
+        val partial = snapshot.points.any {
             it.co2Ppm == null || it.temperatureX10 == null ||
                 it.humidityX10 == null || it.pressureX10 == null
         }
@@ -68,14 +70,15 @@ object PebbleProtocol {
             TEMP_X10.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.temperatureX10),
             HUMIDITY_X10.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.humidityX10),
             PRESSURE_X10.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.pressureX10),
+            SCALE.toUInt() to PebbleDictionaryItem.UInt8(snapshot.scale.wireValue),
         )
-        snapshot.days.take(7).forEachIndexed { index, day ->
+        snapshot.points.take(7).forEachIndexed { index, point ->
             val base = 20 + index * 5
-            result[base.toUInt()] = PebbleDictionaryItem.UInt32(day.date.toLong())
-            result[(base + 1).toUInt()] = PebbleDictionaryItem.Int32(day.co2Ppm ?: UNAVAILABLE)
-            result[(base + 2).toUInt()] = PebbleDictionaryItem.Int32(day.temperatureX10 ?: UNAVAILABLE)
-            result[(base + 3).toUInt()] = PebbleDictionaryItem.Int32(day.humidityX10 ?: UNAVAILABLE)
-            result[(base + 4).toUInt()] = PebbleDictionaryItem.Int32(day.pressureX10 ?: UNAVAILABLE)
+            result[base.toUInt()] = PebbleDictionaryItem.UInt32(point.startsAtEpochSeconds.toLong())
+            result[(base + 1).toUInt()] = PebbleDictionaryItem.Int32(point.co2Ppm ?: UNAVAILABLE)
+            result[(base + 2).toUInt()] = PebbleDictionaryItem.Int32(point.temperatureX10 ?: UNAVAILABLE)
+            result[(base + 3).toUInt()] = PebbleDictionaryItem.Int32(point.humidityX10 ?: UNAVAILABLE)
+            result[(base + 4).toUInt()] = PebbleDictionaryItem.Int32(point.pressureX10 ?: UNAVAILABLE)
         }
         return result
     }

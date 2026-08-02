@@ -72,10 +72,16 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
         return result
     }
 
-    fun snapshot(address: String, location: String, nowEpochSeconds: Long): AirSnapshot? =
+    fun snapshot(
+        address: String,
+        location: String,
+        nowEpochSeconds: Long,
+        scale: ChartScale = ChartScale.HOUR,
+    ): AirSnapshot? =
         SnapshotAggregator.build(
             readings(address, nowEpochSeconds - 8L * 24 * 60 * 60),
             location,
             nowEpochSeconds,
+            scale,
         )
 }

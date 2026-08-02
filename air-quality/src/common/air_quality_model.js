@@ -20,17 +20,6 @@ function scaled(value, scale, minimum, maximum) {
   return Math.round(Number(value) * scale);
 }
 
-function packedDate(value) {
-  var match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? Number(match[1] + match[2] + match[3]) : 0;
-}
-
-function localDate(daysAgo, now) {
-  var value = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo, 12);
-  function pad(number) { return number < 10 ? '0' + number : String(number); }
-  return value.getFullYear() + '-' + pad(value.getMonth() + 1) + '-' + pad(value.getDate());
-}
-
 function normalize(reading) {
   reading = reading || {};
   return {
@@ -41,15 +30,15 @@ function normalize(reading) {
   };
 }
 
-function sevenDays(daily, now) {
-  var byDate = {};
-  (daily || []).forEach(function (row) {
-    if (row && row.date) byDate[String(row.date).slice(0, 10)] = normalize(row);
-  });
+function sevenBuckets(points, now, scale) {
+  var widths = [600000, 14400000, 86400000];
+  var width = widths[scale] || widths[0];
+  var start = Math.floor(now.getTime() / width) * width;
+  if (scale === 2) start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   var result = [];
   for (var i = 0; i < DAYS; i += 1) {
-    var iso = localDate(i, now);
-    result.push({date: packedDate(iso), values: byDate[iso] || normalize({})});
+    result.push({time: Math.floor((start - i * width) / 1000),
+      values: normalize((points || [])[i])});
   }
   return result;
 }
@@ -68,10 +57,12 @@ function co2State(value, supplied) {
   return Number(value) < 1000 ? 1 : Number(value) <= 1400 ? 2 : 3;
 }
 
-function dictionary(snapshot, observedAt, requestId) {
+function dictionary(snapshot, observedAt, requestId, requestedScale) {
   snapshot = snapshot || {};
+  var scale = finite(requestedScale) ? Number(requestedScale) : Number(snapshot.scale || 0);
+  if (scale < 0 || scale > 2) scale = 0;
   var current = normalize(snapshot.current);
-  var days = sevenDays(snapshot.daily, new Date(observedAt));
+  var days = sevenBuckets(snapshot.points, new Date(observedAt), scale);
   var result = {
     PROTOCOL: 1,
     STATUS: isPartial(snapshot.current, days) ? 8 : 0,
@@ -86,10 +77,11 @@ function dictionary(snapshot, observedAt, requestId) {
     HUMIDITY_X10: current.humidity,
     PRESSURE_X10: current.pressure
   };
+  result.SCALE = scale;
   if (requestId) result.REQUEST_ID = requestId;
   var suffixes = {co2: 'CO2', temperature: 'TEMP_X10', humidity: 'HUMIDITY_X10', pressure: 'PRESSURE_X10'};
   days.forEach(function (day, index) {
-    result['DAY' + index + '_DATE'] = day.date;
+    result['DAY' + index + '_DATE'] = day.time;
     METRICS.forEach(function (name) {
       result['DAY' + index + '_' + suffixes[name]] = day.values[name];
     });
@@ -98,5 +90,5 @@ function dictionary(snapshot, observedAt, requestId) {
 }
 
 module.exports = {DAYS: DAYS, UNAVAILABLE: UNAVAILABLE, METRICS: METRICS,
-  normalize: normalize, sevenDays: sevenDays, isPartial: isPartial,
+  normalize: normalize, sevenBuckets: sevenBuckets, isPartial: isPartial,
   co2State: co2State, dictionary: dictionary};

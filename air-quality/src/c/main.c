@@ -4,12 +4,13 @@
 #define DAYS 7
 #define METRICS 4
 #define PAGE_COUNT 5
-#define CACHE_VERSION 2
+#define CACHE_VERSION 3
 #define PERSIST_KEY_CACHE 4102
 #define UNAVAILABLE INT32_MIN
 #define RESPONSE_TIMEOUT_MS 30000
 
-enum { COMMAND_FETCH = 1, COMMAND_PHONE_READY = 2 };
+enum { COMMAND_FETCH = 1, COMMAND_PHONE_READY = 2, COMMAND_SCALE = 3 };
+enum { SCALE_HOUR = 0, SCALE_DAY = 1, SCALE_WEEK = 2, SCALE_COUNT = 3 };
 enum {
   STATUS_OK = 0, STATUS_SETUP = 1, STATUS_COMPANION = 2,
   STATUS_BLUETOOTH = 3, STATUS_PERMISSION = 4, STATUS_SENSOR = 5,
@@ -22,6 +23,7 @@ typedef struct {
   uint8_t flags;
   uint8_t co2_state;
   uint8_t battery;
+  uint8_t scale;
   uint32_t observed_at;
   char location[32];
   int32_t current[METRICS];
@@ -38,10 +40,12 @@ static bool s_loading;
 static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
 static uint16_t s_request_id;
+static uint8_t s_scale;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESS"};
-static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESSURE"};
+static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESS"};
 static const char *WEEKDAYS[] = {"S", "M", "T", "W", "T", "F", "S"};
+static const char *SCALE_NAMES[] = {"1 HOUR", "1 DAY", "1 WEEK"};
 
 static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
                       GTextAlignment align, GColor color) {
@@ -84,9 +88,10 @@ static void format_metric(char *buffer, size_t size, int metric, int32_t value) 
   } else if (metric == 0) {
     snprintf(buffer, size, "%ld ppm", (long)value);
   } else if (metric == 1) {
-    long whole = value / 10;
-    long fraction = labs(value % 10);
-    snprintf(buffer, size, "%ld.%ld C", whole, fraction);
+    int32_t fahrenheit = (value * 9 + (value >= 0 ? 2 : -2)) / 5 + 320;
+    long whole = fahrenheit / 10;
+    long fraction = labs(fahrenheit % 10);
+    snprintf(buffer, size, "%ld.%ld F", whole, fraction);
   } else if (metric == 2) {
     snprintf(buffer, size, "%ld.%ld %%", (long)(value / 10), (long)labs(value % 10));
   } else {
@@ -129,8 +134,8 @@ static void draw_footer(GContext *ctx, GRect bounds) {
   else if (s_status >= STATUS_COMPANION && s_status <= STATUS_SERVICE)
     snprintf(footer, sizeof(footer), "%s  SELECT RETRY", short_error());
   else format_age(footer, sizeof(footer));
-  draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-            GRect(5, bounds.size.h - 18, bounds.size.w - 10, 18),
+  draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_18),
+            GRect(5, bounds.size.h - 22, bounds.size.w - 10, 22),
             GTextAlignmentCenter, GColorBlack);
 }
 
@@ -178,7 +183,7 @@ static void draw_current(GContext *ctx, GRect bounds) {
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_draw_line(ctx, GPoint(8, 99), GPoint(bounds.size.w - 8, 99));
   for (int metric = 1; metric < METRICS; metric++) {
-    int y = 100 + (metric - 1) * 27;
+    int y = 99 + (metric - 1) * 26;
     draw_text(ctx, METRIC_NAMES[metric], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
               GRect(8, y, 76, 28), GTextAlignmentLeft, GColorBlack);
     format_metric(value, sizeof(value), metric, s_cache.current[metric]);
@@ -187,9 +192,9 @@ static void draw_current(GContext *ctx, GRect bounds) {
   }
   snprintf(value, sizeof(value), s_cache.battery <= 100 ? "%u %%" : "--", s_cache.battery);
   draw_text(ctx, "BATT", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 181, 76, 28), GTextAlignmentLeft, GColorBlack);
+            GRect(8, 177, 76, 28), GTextAlignmentLeft, GColorBlack);
   draw_text(ctx, value, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(78, 181, bounds.size.w - 86, 28), GTextAlignmentRight, GColorBlack);
+            GRect(78, 177, bounds.size.w - 86, 28), GTextAlignmentRight, GColorBlack);
   draw_footer(ctx, bounds);
 }
 
@@ -202,26 +207,32 @@ static void graph_range(int metric, int32_t *minimum, int32_t *maximum) {
     if (value > high) high = value;
   }
   if (low == INT32_MAX) { *minimum = 0; *maximum = 1; return; }
-  if (metric == 0) {
+  if (metric == 0 && s_scale == SCALE_WEEK) {
     *minimum = 0; *maximum = ((high + 499) / 500) * 500;
-  } else if (metric == 2) {
+  } else if (metric == 2 && s_scale == SCALE_WEEK) {
     *minimum = 0; *maximum = ((high + 99) / 100) * 100;
   } else {
-    int32_t step = 50;
-    *minimum = ((low - step) / step) * step;
-    *maximum = ((high + step + step - 1) / step) * step;
+    int32_t step = metric == 0 ? 100 : 50;
+    *minimum = (low / step) * step;
+    *maximum = ((high + step - 1) / step) * step;
   }
   if (*maximum <= *minimum) *maximum = *minimum + (metric == 0 ? 500 : 50);
 }
 
-static int day_of_week(int year, int month, int day) {
-  static const int offsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
-  if (month < 3) year--;
-  return (year + year / 4 - year / 100 + year / 400 + offsets[month - 1] + day) % 7;
-}
-
-static void parse_date(uint32_t packed, int *year, int *month, int *day) {
-  *year = packed / 10000; *month = (packed / 100) % 100; *day = packed % 100;
+static void format_point_label(char *buffer, size_t size, uint32_t timestamp) {
+  if (!timestamp) { snprintf(buffer, size, "?"); return; }
+  time_t value = (time_t)timestamp;
+  struct tm *local = localtime(&value);
+  if (!local) { snprintf(buffer, size, "?"); return; }
+  if (s_scale == SCALE_WEEK) {
+    snprintf(buffer, size, "%s", WEEKDAYS[local->tm_wday]);
+  } else if (s_scale == SCALE_DAY) {
+    int hour = local->tm_hour % 12;
+    snprintf(buffer, size, "%d%c", hour ? hour : 12,
+             local->tm_hour < 12 ? 'A' : 'P');
+  } else {
+    snprintf(buffer, size, "%02d", local->tm_min);
+  }
 }
 
 static void draw_chart(GContext *ctx, GRect bounds) {
@@ -231,13 +242,24 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   draw_header(ctx, bounds, s_cache.location, GRAPH_NAMES[metric]);
   int32_t minimum, maximum;
   graph_range(metric, &minimum, &maximum);
-  char min_text[20], max_text[20];
-  format_metric(min_text, sizeof(min_text), metric, minimum);
-  format_metric(max_text, sizeof(max_text), metric, maximum);
-  if (minimum == 0) snprintf(range_text, sizeof(range_text), "%s", max_text);
-  else snprintf(range_text, sizeof(range_text), "%s - %s", min_text, max_text);
+  if (metric == 0) {
+    if (minimum == 0) snprintf(range_text, sizeof(range_text), "%ld ppm", (long)maximum);
+    else snprintf(range_text, sizeof(range_text), "%ld-%ld", (long)minimum, (long)maximum);
+  } else if (metric == 1) {
+    int32_t low_f = (minimum * 9) / 5 + 320;
+    int32_t high_f = (maximum * 9) / 5 + 320;
+    snprintf(range_text, sizeof(range_text), "%ld-%ld F", (long)(low_f / 10), (long)(high_f / 10));
+  } else if (metric == 2) {
+    snprintf(range_text, sizeof(range_text), "%ld-%ld%%",
+             (long)(minimum / 10), (long)(maximum / 10));
+  } else {
+    snprintf(range_text, sizeof(range_text), "%ld-%ld",
+             (long)(minimum / 10), (long)(maximum / 10));
+  }
+  draw_text(ctx, SCALE_NAMES[s_scale], fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            GRect(8, 32, 70, 24), GTextAlignmentLeft, GColorBlack);
   draw_text(ctx, range_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-            GRect(8, 30, bounds.size.w - 16, 28), GTextAlignmentRight, GColorBlack);
+            GRect(70, 30, bounds.size.w - 78, 28), GTextAlignmentRight, GColorBlack);
   const int left = 9, right = bounds.size.w - 9, top = 58, bottom = 151;
   int slot = (right - left) / DAYS;
   graphics_context_set_stroke_color(ctx, GColorBlack);
@@ -245,26 +267,37 @@ static void draw_chart(GContext *ctx, GRect bounds) {
   graphics_draw_line(ctx, GPoint(left, top), GPoint(right, top));
   graphics_draw_line(ctx, GPoint(left, bottom), GPoint(right, bottom));
   int64_t total = 0; int count = 0;
+  GPoint previous = GPointZero;
+  bool has_previous = false;
   for (int column = 0; column < DAYS; column++) {
     int day = DAYS - 1 - column;
     int32_t value = s_cache.history[metric][day];
     int center = left + column * slot + slot / 2;
     if (value == UNAVAILABLE) {
       graphics_draw_line(ctx, GPoint(center - 4, bottom - 5), GPoint(center + 4, bottom - 5));
+      has_previous = false;
     } else {
       int height = (int)(((int64_t)(value - minimum) * (bottom - top)) / (maximum - minimum));
       if (height < 0) height = 0;
       if (height > bottom - top) height = bottom - top;
-      if (height) graphics_fill_rect(ctx, GRect(center - 7, bottom - height, 14, height), 0, GCornerNone);
-      else graphics_draw_line(ctx, GPoint(center - 7, bottom - 1), GPoint(center + 7, bottom - 1));
+      int y = bottom - height;
+      if (s_scale == SCALE_WEEK) {
+        if (height) graphics_fill_rect(ctx, GRect(center - 7, y, 14, height), 0, GCornerNone);
+        else graphics_draw_line(ctx, GPoint(center - 7, bottom - 1), GPoint(center + 7, bottom - 1));
+      } else {
+        GPoint point = GPoint(center, y);
+        if (has_previous) graphics_draw_line(ctx, previous, point);
+        graphics_fill_circle(ctx, point, 3);
+        previous = point;
+        has_previous = true;
+      }
       total += value; count++;
     }
-    int year = 0, month = 0, date = 0;
-    parse_date(s_cache.dates[day], &year, &month, &date);
-    const char *label = month >= 1 && month <= 12 && date >= 1 && date <= 31 ?
-      WEEKDAYS[day_of_week(year, month, date)] : "?";
+    char label[6];
+    format_point_label(label, sizeof(label), s_cache.dates[day]);
     draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-              GRect(center - 10, bottom + 1, 20, 22), GTextAlignmentCenter, GColorBlack);
+              GRect(center - slot / 2, bottom + 1, slot, 22),
+              GTextAlignmentCenter, GColorBlack);
   }
   if (count) {
     char avg[24]; format_metric(avg, sizeof(avg), metric, (int32_t)(total / count));
@@ -279,7 +312,9 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-  if (!s_has_cache) draw_state(ctx, bounds);
+  if (s_loading) draw_state(ctx, bounds);
+  else if (s_status >= STATUS_SETUP && s_status <= STATUS_SERVICE) draw_state(ctx, bounds);
+  else if (!s_has_cache) draw_state(ctx, bounds);
   else if (s_page == 0) draw_current(ctx, bounds);
   else draw_chart(ctx, bounds);
 }
@@ -289,7 +324,7 @@ static void refresh_timeout(void *context) {
   layer_mark_dirty(s_canvas);
 }
 
-static void request_refresh(void) {
+static void request_data(uint8_t command) {
   if (s_loading) return;
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
@@ -297,8 +332,9 @@ static void request_refresh(void) {
   }
   s_request_id++;
   dict_write_uint8(iter, MESSAGE_KEY_PROTOCOL, 1);
-  dict_write_uint8(iter, MESSAGE_KEY_COMMAND, COMMAND_FETCH);
+  dict_write_uint8(iter, MESSAGE_KEY_COMMAND, command);
   dict_write_uint16(iter, MESSAGE_KEY_REQUEST_ID, s_request_id);
+  dict_write_uint8(iter, MESSAGE_KEY_SCALE, s_scale);
   if (app_message_outbox_send() != APP_MSG_OK) {
     s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas); return;
   }
@@ -307,6 +343,8 @@ static void request_refresh(void) {
   s_timer = app_timer_register(RESPONSE_TIMEOUT_MS, refresh_timeout, NULL);
   layer_mark_dirty(s_canvas);
 }
+
+static void request_refresh(void) { request_data(COMMAND_FETCH); }
 
 static int32_t tuple_i32(DictionaryIterator *iter, uint32_t key, int32_t fallback) {
   Tuple *tuple = dict_find(iter, key);
@@ -347,6 +385,9 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     next.co2_state = (uint8_t)tuple_i32(iter, MESSAGE_KEY_CO2_STATE, 0);
     int32_t battery = tuple_i32(iter, MESSAGE_KEY_BATTERY, 255);
     next.battery = battery >= 0 && battery <= 100 ? (uint8_t)battery : 255;
+    next.scale = (uint8_t)tuple_i32(iter, MESSAGE_KEY_SCALE, s_scale);
+    if (next.scale >= SCALE_COUNT) next.scale = SCALE_HOUR;
+    s_scale = next.scale;
     next.observed_at = observed->value->uint32;
     snprintf(next.location, sizeof(next.location), "%s", location->value->cstring);
     const uint32_t current_keys[] = {MESSAGE_KEY_CO2, MESSAGE_KEY_TEMP_X10,
@@ -385,7 +426,17 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, voi
   s_loading = false; s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas);
 }
 
-static void select_click(ClickRecognizerRef recognizer, void *context) { request_refresh(); }
+static void select_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_loading) return;
+  if (s_status >= STATUS_SETUP && s_status <= STATUS_SERVICE) {
+    request_refresh();
+  } else if (s_page == 0) {
+    request_refresh();
+  } else {
+    s_scale = (s_scale + 1) % SCALE_COUNT;
+    request_data(COMMAND_SCALE);
+  }
+}
 static void up_click(ClickRecognizerRef recognizer, void *context) {
   if (s_page > 0) { s_page--; layer_mark_dirty(s_canvas); }
 }
@@ -412,6 +463,7 @@ static void init(void) {
       persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) == sizeof(s_cache) &&
       s_cache.version == CACHE_VERSION) {
     s_has_cache = true; s_status = STATUS_OK;
+    s_scale = s_cache.scale < SCALE_COUNT ? s_cache.scale : SCALE_HOUR;
   }
   s_window = window_create();
   window_set_background_color(s_window, GColorWhite);

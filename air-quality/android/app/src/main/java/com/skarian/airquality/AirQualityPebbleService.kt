@@ -27,12 +27,16 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         watch: WatchIdentifier,
     ): ReceiveResult {
         if (watchappUUID != appUuid) return ReceiveResult.Nack
-        if (PebbleProtocol.number(data, PebbleProtocol.COMMAND) != PebbleProtocol.COMMAND_FETCH) {
+        val command = PebbleProtocol.number(data, PebbleProtocol.COMMAND)
+        if (command != PebbleProtocol.COMMAND_FETCH && command != PebbleProtocol.COMMAND_SCALE) {
             return ReceiveResult.Ack
         }
         val requestId = PebbleProtocol.number(data, PebbleProtocol.REQUEST_ID) ?: return ReceiveResult.Nack
+        val scale = ChartScale.fromWire(PebbleProtocol.number(data, PebbleProtocol.SCALE))
         latestRequest.set(requestId)
-        coroutineScope.launch { refreshAndSend(requestId, watch) }
+        coroutineScope.launch {
+            refreshAndSend(requestId, watch, scale, command == PebbleProtocol.COMMAND_FETCH)
+        }
         return ReceiveResult.Ack
     }
 
@@ -46,39 +50,46 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         super.onDestroy()
     }
 
-    private suspend fun refreshAndSend(requestId: Int, watch: WatchIdentifier) {
+    private suspend fun refreshAndSend(
+        requestId: Int,
+        watch: WatchIdentifier,
+        scale: ChartScale,
+        refreshSensor: Boolean,
+    ) {
         val settings = CompanionSettings(this)
         val address = settings.sensorAddress
         if (address.isNullOrBlank()) {
             sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_SETUP, requestId), watch)
             return
         }
-        val scanner = AranetScanner(this)
-        if (!scanner.hasPermissions()) {
-            sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_PERMISSION, requestId), watch)
-            return
-        }
-        if (!scanner.bluetoothEnabled()) {
-            sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_BLUETOOTH, requestId), watch)
-            return
-        }
-
-        val reading = suspendCancellableCoroutine { continuation ->
-            scanner.readOnce(address) { result ->
-                if (continuation.isActive) continuation.resume(result)
+        if (refreshSensor) {
+            val scanner = AranetScanner(this)
+            if (!scanner.hasPermissions()) {
+                sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_PERMISSION, requestId), watch)
+                return
             }
-        }
-        if (latestRequest.get() != requestId) return
-        if (reading == null) {
-            send(PebbleProtocol.status(PebbleProtocol.STATUS_SENSOR, requestId), watch)
-            return
+            if (!scanner.bluetoothEnabled()) {
+                sendIfCurrent(requestId, PebbleProtocol.status(PebbleProtocol.STATUS_BLUETOOTH, requestId), watch)
+                return
+            }
+
+            val reading = suspendCancellableCoroutine { continuation ->
+                scanner.readOnce(address) { result ->
+                    if (continuation.isActive) continuation.resume(result)
+                }
+            }
+            if (latestRequest.get() != requestId) return
+            if (reading == null) {
+                send(PebbleProtocol.status(PebbleProtocol.STATUS_SENSOR, requestId), watch)
+                return
+            }
+            ReadingStore(this).use { it.save(reading) }
         }
 
-        val store = ReadingStore(this)
-        store.save(reading)
         val now = Instant.now().epochSecond
-        val snapshot = store.snapshot(address, settings.watchName, now)
-        store.close()
+        val snapshot = ReadingStore(this).use {
+            it.snapshot(address, settings.watchName, now, scale)
+        }
         if (snapshot == null) {
             send(PebbleProtocol.status(PebbleProtocol.STATUS_SERVICE, requestId), watch)
             return

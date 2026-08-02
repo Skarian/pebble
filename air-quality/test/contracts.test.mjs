@@ -11,7 +11,7 @@ const protocol = readFileSync(new URL('../android/app/src/main/java/com/skarian/
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
 
 test('watch keeps a new versioned last-good cache and rejects stale responses', () => {
-  assert.match(watch, /CACHE_VERSION 2/);
+  assert.match(watch, /CACHE_VERSION 3/);
   assert.match(watch, /PERSIST_KEY_CACHE 4102/);
   assert.match(watch, /!request \|\| request->value->uint16 != s_request_id/);
   assert.match(watch, /observed->value->uint32 < s_cache\.observed_at/);
@@ -24,6 +24,7 @@ test('navigation is one bounded current page plus four charts', () => {
   assert.match(watch, /if \(s_page > 0\)/);
   assert.match(watch, /s_page \+ 1 < PAGE_COUNT/);
   assert.deepEqual(packageJson.pebble.messageKeys.CO2, 10);
+  assert.deepEqual(packageJson.pebble.messageKeys.SCALE, 14);
   assert.deepEqual(packageJson.pebble.messageKeys.DAY6_PRESSURE_X10, 54);
 });
 
@@ -47,8 +48,18 @@ test('typography and plain headers keep the CPAP hierarchy', () => {
   assert.match(watch, /FONT_KEY_BITHAM_42_BOLD/);
   assert.match(watch, /FONT_KEY_GOTHIC_24_BOLD/);
   assert.match(watch, /FONT_KEY_GOTHIC_28_BOLD/);
+  assert.match(watch, /footer, fonts_get_system_font\(FONT_KEY_GOTHIC_18\)/);
   assert.match(watch, /draw_header\(ctx, bounds, s_cache\.location, "CO2"\)/);
   assert.doesNotMatch(watch, /graphics_fill_rect\(ctx, GRect\(0, 0, bounds\.size\.w, 30\)/);
+});
+
+test('refresh blocks the whole screen and charts cycle hour day week scales', () => {
+  assert.match(watch, /if \(s_loading\) draw_state/);
+  assert.match(watch, /s_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
+  assert.match(watch, /request_data\(COMMAND_SCALE\)/);
+  assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
+  assert.match(watch, /if \(s_scale == SCALE_WEEK\)/);
+  assert.match(watch, /graphics_draw_line\(ctx, previous, point\)/);
 });
 
 test('current state uses the three Aranet display states and concise stale copy', () => {

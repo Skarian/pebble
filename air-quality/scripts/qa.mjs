@@ -117,7 +117,7 @@ function encode(dictionary) {
     if (name === 'LOCATION' || name === 'ERROR_TEXT') type = 'cstring';
     else if (name === 'OBSERVED_AT' || name.endsWith('_DATE')) type = 'uint32';
     else if (name === 'REQUEST_ID') type = 'uint16';
-    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS', 'CO2_STATE'].includes(name)) type = 'uint8';
+    else if (['PROTOCOL', 'COMMAND', 'STATUS', 'FLAGS', 'CO2_STATE', 'SCALE'].includes(name)) type = 'uint8';
     encoded[MESSAGE_KEYS[name]] = {type, value};
   }
   return encoded;
@@ -125,13 +125,6 @@ function encode(dictionary) {
 
 function status(statusCode, requestId, text) {
   return encode({PROTOCOL: 1, STATUS: statusCode, REQUEST_ID: requestId, ERROR_TEXT: text || ''});
-}
-
-function dateOffset(days) {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() - days);
-  return date.toISOString().slice(0, 10);
 }
 
 function snapshot(co2, options = {}) {
@@ -143,8 +136,7 @@ function snapshot(co2, options = {}) {
     pressure: options.pressure ?? 1008.6,
     battery: options.battery ?? 87,
   };
-  const daily = Array.from({length: 7}, (_, index) => ({
-    date: dateOffset(index + (options.ageDays || 0)),
+  const points = Array.from({length: 7}, (_, index) => ({
     co2: Math.max(420, co2 - index * 35),
     temperature: base.temperature - index * 0.2,
     humidity: base.humidity + index * 0.4,
@@ -152,10 +144,11 @@ function snapshot(co2, options = {}) {
   }));
   if (options.missingMetric) {
     delete base.pressure;
-    daily.forEach((row) => delete row.pressure);
+    points.forEach((row) => delete row.pressure);
   }
-  if (options.missingHistory) daily.splice(0, 7);
-  return {location: 'HOME', current: base, daily, stale: Boolean(options.stale)};
+  if (options.missingHistory) points.splice(0, 7);
+  return {location: 'HOME', current: base, points, scale: options.scale || 0,
+    stale: Boolean(options.stale)};
 }
 
 function liveSnapshot(env) {
@@ -217,10 +210,26 @@ async function main() {
     await capture('UNHEALTHY', encode(Model.dictionary(snapshot(1650, {co2State: 3}), Date.now(), 2)));
     await capture('MISSING METRIC', encode(Model.dictionary(snapshot(820, {missingMetric: true}), Date.now(), 2)));
     await capture('STALE DATA', encode(Model.dictionary(snapshot(1120, {stale: true, ageDays: 3}), Date.now() - 3 * 86400000, 2)));
-    await capture('MISSING HISTORY', encode(Model.dictionary(snapshot(760, {missingHistory: true}), Date.now(), 2)));
-    await capture('CURRENT READING', encode(Model.dictionary(snapshot(612), Date.now(), 2)));
-    for (const label of ['CO2 CHART', 'TEMP CHART', 'HUMIDITY CHART', 'PRESSURE CHART']) {
-      await capture(label, null, ['down']);
+    await capture('MISSING HISTORY',
+      encode(Model.dictionary(snapshot(760, {missingHistory: true}), Date.now(), 2)), ['down']);
+    await capture('CURRENT READING', encode(Model.dictionary(snapshot(612), Date.now(), 2)), ['up']);
+    let chartRequest = 2;
+    const chartMetrics = ['CO2', 'TEMP', 'HUMIDITY', 'PRESSURE'];
+    for (const metric of chartMetrics) {
+      if (metric === 'CO2') {
+        await capture(`${metric} 1 HOUR`, null, ['down']);
+      } else {
+        chartRequest += 1;
+        await capture(`${metric} 1 HOUR`,
+          encode(Model.dictionary(snapshot(612, {scale: 0}), Date.now(), chartRequest, 0)),
+          ['select', 'down']);
+      }
+      chartRequest += 1;
+      await capture(`${metric} 1 DAY`,
+        encode(Model.dictionary(snapshot(612, {scale: 1}), Date.now(), chartRequest, 1)), ['select']);
+      chartRequest += 1;
+      await capture(`${metric} 1 WEEK`,
+        encode(Model.dictionary(snapshot(612, {scale: 2}), Date.now(), chartRequest, 2)), ['select']);
     }
     if (live) {
       await capture('LIVE CURRENT', encode(Model.dictionary(live, Date.now(), 2)), ['up', 'up', 'up', 'up']);

@@ -11,12 +11,12 @@ test('normalizes the four real Aranet4 metrics', () => {
   assert.equal(model.normalize({temperature: -5.2}).temperature, -52);
 });
 
-test('builds seven newest-to-oldest calendar slots', () => {
-  const slots = model.sevenDays([{date: '2026-08-01', co2: 700}], new Date(2026, 7, 2, 12));
+test('builds seven newest-to-oldest chart buckets for each scale', () => {
+  const slots = model.sevenBuckets([{co2: 700}], new Date(2026, 7, 2, 12), 2);
   assert.equal(slots.length, 7);
-  assert.equal(slots[0].date, 20260802);
-  assert.equal(slots[1].date, 20260801);
-  assert.equal(slots[1].values.co2, 700);
+  assert.equal(slots[0].values.co2, 700);
+  assert.ok(slots[0].time > slots[1].time);
+  assert.equal(slots[0].time - slots[1].time, 86400);
 });
 
 test('uses supplied Aranet state and default thresholds only as fallback', () => {
@@ -33,4 +33,5 @@ test('dictionary marks incomplete history without adding provider credentials', 
   assert.equal(message.REQUEST_ID, 9);
   assert.equal(message.CO2, 612);
   assert.equal(message.DAY6_PRESSURE_X10, model.UNAVAILABLE);
+  assert.equal(message.SCALE, 0);
 });

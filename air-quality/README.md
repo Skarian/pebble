@@ -1,13 +1,15 @@
 # AirQuality for Pebble
 
 AirQuality puts an Aranet4 HOME reading on Pebble. It shows CO2 first, with
-temperature, humidity, pressure, battery, and one seven-day chart for each air
-measurement.
+temperature in Fahrenheit, humidity, pressure, battery, and a chart for each
+air measurement.
 
 - Open the watch app to refresh automatically.
-- Press **Select** to refresh again.
+- Press **Select** on the current screen to refresh again.
 - Press **Up** or **Down** to move through the current reading and four charts.
   The list stops at either end.
+- Press **Select** on a chart to cycle through **1 hour**, **1 day**, and
+  **1 week**.
 
 The watch keeps the last good reading. Missing values appear as `--`, and the
 update line always says how old the visible reading is. AirQuality is for
@@ -58,9 +60,14 @@ If the sensor appears without a reading, open Aranet Home and enable
 ## How history works
 
 The companion saves readings locally while its monitoring notification is
-running. The charts fill over the first seven days and retain at most eight
-days. This first build does not import old records stored inside the Aranet4;
-adding that GATT history import is the next hardware-validated step.
+running. One-hour and one-day views use a line through averaged time buckets;
+the one-week view uses daily average bars. Short ranges make changes visible,
+while week bars remain anchored for honest day-to-day comparison. The database
+retains eight days.
+
+History starts when the companion is installed. It does not import older
+records stored inside the Aranet4, so the hour view fills first, followed by
+the day and week views.
 
 No data is uploaded and no bridge server is used. Removing the Android app
 removes its saved readings and selected sensor.
@@ -76,7 +83,7 @@ This fake-data command tests the contracts, builds the production PBW, and
 creates a numbered `qa-results/.../all-states.png` board. It covers setup,
 loading, companion and Bluetooth problems, permission, missing sensor, timeout,
 service failure, all three device CO2 states, missing metrics and history,
-old data, the current screen, and every chart.
+old data, the current screen, and every chart at every scale.
 
 The fake states are injected from the repository QA runner. The production PBW
 contains no fixtures, QA navigation, local server, or test mode. The runner
@@ -86,10 +93,12 @@ and releases both the emulator and lock on every exit.
 ## Design and behavior
 
 The screen hierarchy, short labels, monochrome spacing, large system fonts,
-bounded list, last-good cache, request IDs, stale-response rejection, and
-numbered QA board follow the working `cpap/` app. The Aranet adaptation removes
-cloud setup, AQI, polling modes, technical status prose, and extra metadata.
-There is one primary value or action per screen.
+blocking full-screen sync and error states, bounded list, last-good cache,
+request IDs, stale-response rejection, and numbered QA board follow the
+working `cpap/` app. The updated line is promoted to a more readable system
+font after native-device review. The Aranet adaptation removes cloud setup,
+AQI, polling modes, technical status prose, and extra metadata. There is one
+primary value or action per screen.
 
 The device's own CO2 state drives the face instead of hard-coded thresholds,
 because Aranet lets users customize its CO2 limits. The standard defaults are

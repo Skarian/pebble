@@ -153,7 +153,9 @@ class MainActivity : Activity() {
             return
         }
         val now = Instant.now().epochSecond
-        val snapshot = ReadingStore(this).use { it.snapshot(address, settings.watchName, now) }
+            val snapshot = ReadingStore(this).use {
+                it.snapshot(address, settings.watchName, now, ChartScale.HOUR)
+            }
         if (snapshot == null) {
             currentReading.text = "No reading yet"
             detailReading.text = "Tap Refresh now."
@@ -161,8 +163,8 @@ class MainActivity : Activity() {
             val value = snapshot.current
             currentReading.text = "${value.co2Ppm} ppm"
             detailReading.text = String.format(
-                "%.1f C · %.0f%% · %.1f hPa · %s",
-                value.temperatureX10 / 10.0,
+                "%.1f F · %.0f%% · %.1f hPa · %s",
+                value.temperatureX10 * 0.18 + 32.0,
                 value.humidityX10 / 10.0,
                 value.pressureX10 / 10.0,
                 age(now - value.observedAtEpochSeconds),
