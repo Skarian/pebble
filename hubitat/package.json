@@ -1,0 +1,43 @@
+{
+  "name": "hubitat",
+  "author": "Neil Skaria",
+  "version": "0.1.0",
+  "keywords": ["pebble-app", "hubitat", "home-automation"],
+  "private": true,
+  "dependencies": {},
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "qa": "node scripts/qa-screenshots.mjs",
+    "qa:screenshots": "node scripts/qa-screenshots.mjs"
+  },
+  "pebble": {
+    "displayName": "Hubitat",
+    "uuid": "e3f31c74-63d6-4d6d-a8c7-1f8540ad2a59",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "capabilities": ["configurable"],
+    "watchapp": {"watchface": false},
+    "messageKeys": {
+      "PROTOCOL": 0,
+      "COMMAND": 1,
+      "REQUEST_ID": 2,
+      "STATUS": 3,
+      "FETCHED_AT": 4,
+      "COUNT": 5,
+      "ERROR_TEXT": 6,
+      "DEVICE_INDEX": 7,
+      "DEVICE_ID": 8,
+      "DEVICE_LABEL": 9,
+      "DEVICE_KIND": 10,
+      "PRIMARY_VALUE": 11,
+      "SECONDARY_VALUE": 12,
+      "BATTERY": 13,
+      "CONTROL_FLAGS": 14,
+      "ACTION": 15,
+      "RESULT_TEXT": 16,
+      "PARTIAL": 17
+    },
+    "resources": {"media": []}
+  }
+}
