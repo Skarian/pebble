@@ -1,0 +1,89 @@
+{
+  "name": "cpap",
+  "author": "Neil Skaria",
+  "version": "0.1.0",
+  "keywords": ["pebble-app", "health", "cpap"],
+  "private": true,
+  "dependencies": {},
+  "scripts": {
+    "dev": "node scripts/dev-emulator.mjs",
+    "dev:bridge": "CPAP_DEV_EMULATOR=1 node --env-file=.env bridge/server.mjs",
+    "dev:emulator": "node scripts/dev-emulator.mjs",
+    "qa:screenshots": "node scripts/qa-screenshots.mjs",
+    "test": "node --test test/*.test.mjs bridge/*.test.mjs"
+  },
+  "pebble": {
+    "displayName": "CPAP",
+    "uuid": "36641066-7ccf-47dc-be7a-fa4f7257cb1a",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "capabilities": ["configurable"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {
+      "PROTOCOL": 0,
+      "COMMAND": 1,
+      "REQUEST_ID": 2,
+      "STATUS": 3,
+      "SOURCE": 4,
+      "FETCHED_AT": 5,
+      "COUNT": 6,
+      "ERROR_TEXT": 7,
+      "DAY0_DATE": 10,
+      "DAY0_SCORE": 11,
+      "DAY1_DATE": 12,
+      "DAY1_SCORE": 13,
+      "DAY2_DATE": 14,
+      "DAY2_SCORE": 15,
+      "DAY3_DATE": 16,
+      "DAY3_SCORE": 17,
+      "DAY4_DATE": 18,
+      "DAY4_SCORE": 19,
+      "DAY5_DATE": 20,
+      "DAY5_SCORE": 21,
+      "DAY6_DATE": 22,
+      "DAY6_SCORE": 23,
+      "DAY0_USAGE": 24,
+      "DAY0_AHI_X10": 25,
+      "DAY0_MASK_OFF": 26,
+      "DAY0_LEAK_X10": 27,
+      "DAY1_USAGE": 28,
+      "DAY1_AHI_X10": 29,
+      "DAY1_MASK_OFF": 30,
+      "DAY1_LEAK_X10": 31,
+      "DAY2_USAGE": 32,
+      "DAY2_AHI_X10": 33,
+      "DAY2_MASK_OFF": 34,
+      "DAY2_LEAK_X10": 35,
+      "DAY3_USAGE": 36,
+      "DAY3_AHI_X10": 37,
+      "DAY3_MASK_OFF": 38,
+      "DAY3_LEAK_X10": 39,
+      "DAY4_USAGE": 40,
+      "DAY4_AHI_X10": 41,
+      "DAY4_MASK_OFF": 42,
+      "DAY4_LEAK_X10": 43,
+      "DAY5_USAGE": 44,
+      "DAY5_AHI_X10": 45,
+      "DAY5_MASK_OFF": 46,
+      "DAY5_LEAK_X10": 47,
+      "DAY6_USAGE": 48,
+      "DAY6_AHI_X10": 49,
+      "DAY6_MASK_OFF": 50,
+      "DAY6_LEAK_X10": 51
+    },
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true,
+          "memoryFormat": "1Bit"
+        }
+      ]
+    }
+  }
+}
