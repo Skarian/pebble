@@ -50,6 +50,8 @@ test('current AQI uses one label and native watch-safe faces', () => {
   assert.match(watch, /aqi <= 50 \? 1 : aqi <= 100 \? 2 : aqi <= 150 \? 3/);
   assert.match(watch, /aqi <= 200 \? 4 : aqi <= 300 \? 5 : 6/);
   assert.match(watch, /if \(band == 6\)/);
+  assert.match(watch, /const GPoint center = GPoint\(33, 60\)/);
+  assert.match(watch, /graphics_draw_arc/);
   assert.doesNotMatch(watch, /"HEALTHY"|"MODERATE"|"ELEVATED"|"UNHEALTHY"|"HAZARDOUS"/);
   assert.doesNotMatch(watch, /draw_text\(ctx, "AQI"/);
   for (const [label, value] of [['GOOD', 34], ['MODERATE', 72], ['SENSITIVE GROUPS', 128],

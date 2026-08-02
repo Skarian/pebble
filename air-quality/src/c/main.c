@@ -51,46 +51,42 @@ static void draw_text(GContext *ctx, const char *text, GFont font, GRect frame,
 }
 
 static void draw_face(GContext *ctx, uint16_t aqi) {
-  const GPoint center = GPoint(49, 65);
+  const GPoint center = GPoint(33, 60);
   uint8_t band = aqi == UNAVAILABLE ? 3 :
     aqi <= 50 ? 1 : aqi <= 100 ? 2 : aqi <= 150 ? 3 :
     aqi <= 200 ? 4 : aqi <= 300 ? 5 : 6;
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_circle(ctx, center, 25);
+  graphics_draw_circle(ctx, center, 24);
   if (band == 6) {
-    graphics_draw_line(ctx, GPoint(38, 55), GPoint(44, 61));
-    graphics_draw_line(ctx, GPoint(44, 55), GPoint(38, 61));
-    graphics_draw_line(ctx, GPoint(54, 55), GPoint(60, 61));
-    graphics_draw_line(ctx, GPoint(60, 55), GPoint(54, 61));
+    graphics_draw_line(ctx, GPoint(22, 50), GPoint(28, 56));
+    graphics_draw_line(ctx, GPoint(28, 50), GPoint(22, 56));
+    graphics_draw_line(ctx, GPoint(38, 50), GPoint(44, 56));
+    graphics_draw_line(ctx, GPoint(44, 50), GPoint(38, 56));
+  } else if (band == 1) {
+    graphics_draw_arc(ctx, GRect(21, 50, 8, 8), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(450));
+    graphics_draw_arc(ctx, GRect(37, 50, 8, 8), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(450));
   } else {
-    graphics_fill_circle(ctx, GPoint(41, 58), 2);
-    graphics_fill_circle(ctx, GPoint(57, 58), 2);
+    graphics_fill_circle(ctx, GPoint(25, 53), 2);
+    graphics_fill_circle(ctx, GPoint(41, 53), 2);
   }
   if (band == 1) {
-    graphics_draw_line(ctx, GPoint(39, 67), GPoint(44, 72));
-    graphics_draw_line(ctx, GPoint(44, 72), GPoint(49, 74));
-    graphics_draw_line(ctx, GPoint(49, 74), GPoint(54, 72));
-    graphics_draw_line(ctx, GPoint(54, 72), GPoint(59, 67));
+    graphics_draw_arc(ctx, GRect(23, 56, 20, 20), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(105), DEG_TO_TRIGANGLE(255));
   } else if (band == 2) {
-    graphics_draw_line(ctx, GPoint(39, 68), GPoint(44, 71));
-    graphics_draw_line(ctx, GPoint(44, 71), GPoint(49, 72));
-    graphics_draw_line(ctx, GPoint(49, 72), GPoint(54, 71));
-    graphics_draw_line(ctx, GPoint(54, 71), GPoint(59, 68));
+    graphics_draw_arc(ctx, GRect(24, 57, 18, 18), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(120), DEG_TO_TRIGANGLE(240));
   } else if (band == 3) {
-    graphics_draw_line(ctx, GPoint(39, 70), GPoint(59, 70));
+    graphics_draw_line(ctx, GPoint(23, 66), GPoint(43, 66));
   } else if (band == 4) {
-    graphics_draw_line(ctx, GPoint(39, 72), GPoint(44, 69));
-    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, 68));
-    graphics_draw_line(ctx, GPoint(49, 68), GPoint(54, 69));
-    graphics_draw_line(ctx, GPoint(54, 69), GPoint(59, 72));
+    graphics_draw_arc(ctx, GRect(24, 62, 18, 18), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(285), DEG_TO_TRIGANGLE(435));
   } else {
-    int center_y = band == 5 ? 67 : 65;
-    graphics_draw_line(ctx, GPoint(39, 74), GPoint(44, 69));
-    graphics_draw_line(ctx, GPoint(44, 69), GPoint(49, center_y));
-    graphics_draw_line(ctx, GPoint(49, center_y), GPoint(54, 69));
-    graphics_draw_line(ctx, GPoint(54, 69), GPoint(59, 74));
+    graphics_draw_arc(ctx, GRect(22, 62, 22, 22), GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(290), DEG_TO_TRIGANGLE(430));
   }
   graphics_context_set_stroke_width(ctx, 1);
 }
