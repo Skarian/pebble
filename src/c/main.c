@@ -255,15 +255,15 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   const int chart_left = 8;
   const int chart_right = bounds.size.w - 8;
-  const int chart_top = 28;
-  const int chart_bottom = 165;
+  const int chart_top = 26;
+  const int chart_bottom = 157;
   const int chart_height = chart_bottom - chart_top;
   const int slot_width = (chart_right - chart_left) / DAYS;
   const int bar_width = 16;
   const int average_marker_tip = bounds.size.w - 13;
   const int average_marker_base = average_marker_tip + 6;
   const int average_marker_bar = average_marker_base + 2;
-  GFont small_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   uint32_t maximum = graph_scale_max(s_view);
   uint32_t average_total = 0;
   uint8_t average_days = 0;
@@ -287,7 +287,7 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_fill_color(ctx, GColorBlack);
   format_graph_max(max_text, sizeof(max_text), s_view, maximum);
-  graphics_draw_text(ctx, max_text, small_font, GRect(chart_left, 4, 80, 18),
+  graphics_draw_text(ctx, max_text, label_font, GRect(chart_left, 0, 96, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   graphics_draw_line(ctx, GPoint(chart_left, chart_top),
                      GPoint(chart_right, chart_top));
@@ -328,8 +328,8 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
     weekday_text[0] = month >= 1 && month <= 12 && day >= 1 && day <= 31
       ? WEEKDAYS[day_of_week(year, month, day)][0] : '?';
     weekday_text[1] = '\0';
-    graphics_draw_text(ctx, weekday_text, small_font,
-                       GRect(center_x - slot_width / 2, chart_bottom + 1, slot_width, 18),
+    graphics_draw_text(ctx, weekday_text, label_font,
+                       GRect(center_x - slot_width / 2, chart_bottom, slot_width, 22),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   }
 
@@ -346,7 +346,7 @@ static void graph_update_proc(Layer *layer, GContext *ctx) {
 
   format_graph_average(average_text, sizeof(average_text), s_view,
                        average_total, average_days);
-  graphics_draw_text(ctx, average_text, small_font, GRect(8, 183, bounds.size.w - 16, 18),
+  graphics_draw_text(ctx, average_text, label_font, GRect(8, 180, bounds.size.w - 16, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -355,7 +355,7 @@ static void render_state(const char *title, const char *body, const char *footer
   set_state_layers_hidden(false);
   bool title_only = body[0] == '\0' && footer[0] == '\0';
   layer_set_frame(text_layer_get_layer(s_state_title_layer),
-                  GRect(12, title_only ? 96 : 72, 176, 32));
+                  GRect(8, title_only ? 92 : 68, 184, 36));
   text_layer_set_text(s_state_title_layer, title);
   text_layer_set_text(s_state_body_layer, body);
   text_layer_set_text(s_state_footer_layer, footer);
@@ -681,14 +681,14 @@ static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
 
-  s_title_layer = create_text_layer(root, GRect(8, 2, 60, 22),
-                                    FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentLeft, GColorBlack);
+  s_title_layer = create_text_layer(root, GRect(8, 0, 60, 28),
+                                    FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft, GColorBlack);
   text_layer_set_text(s_title_layer, "CPAP");
 
   s_date_layer = create_text_layer(root, GRect(64, 2, bounds.size.w - 72, 22),
                                    FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentRight, GColorBlack);
 
-  s_graph_layer = layer_create(GRect(0, 24, bounds.size.w, bounds.size.h - 24));
+  s_graph_layer = layer_create(GRect(0, 26, bounds.size.w, bounds.size.h - 26));
   layer_set_update_proc(s_graph_layer, graph_update_proc);
   layer_add_child(root, s_graph_layer);
 
@@ -696,8 +696,8 @@ static void window_load(Window *window) {
   layer_set_update_proc(s_ring_layer, ring_update_proc);
   layer_add_child(root, s_ring_layer);
 
-  s_score_label_layer = create_text_layer(root, GRect(60, 41, 80, 18),
-                                          FONT_KEY_GOTHIC_14, GTextAlignmentCenter, GColorBlack);
+  s_score_label_layer = create_text_layer(root, GRect(60, 39, 80, 22),
+                                          FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
   text_layer_set_text(s_score_label_layer, "SCORE");
   s_score_layer = create_text_layer(root, GRect(40, 55, 120, 54),
                                     FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter, GColorBlack);
@@ -706,20 +706,20 @@ static void window_load(Window *window) {
   for (int i = 0; i < METRIC_ROWS; i++) {
     int y = 124 + i * 20;
     s_metric_label_layers[i] = create_text_layer(root, GRect(12, y, 80, 21),
-                                                  FONT_KEY_GOTHIC_18, GTextAlignmentLeft, GColorBlack);
+                                                  FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentLeft, GColorBlack);
     s_metric_value_layers[i] = create_text_layer(root, GRect(90, y, bounds.size.w - 102, 21),
                                                   FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentRight, GColorBlack);
     text_layer_set_text(s_metric_label_layers[i], metric_labels[i]);
   }
-  s_updated_layer = create_text_layer(root, GRect(8, 207, bounds.size.w - 16, 18),
-                                      FONT_KEY_GOTHIC_14, GTextAlignmentCenter, GColorBlack);
+  s_updated_layer = create_text_layer(root, GRect(8, 205, bounds.size.w - 16, 22),
+                                      FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
 
-  s_state_title_layer = create_text_layer(root, GRect(12, 72, bounds.size.w - 24, 32),
-                                          FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter, GColorBlack);
-  s_state_body_layer = create_text_layer(root, GRect(20, 108, bounds.size.w - 40, 54),
-                                         FONT_KEY_GOTHIC_18, GTextAlignmentCenter, GColorBlack);
-  s_state_footer_layer = create_text_layer(root, GRect(8, 188, bounds.size.w - 16, 24),
-                                           FONT_KEY_GOTHIC_14, GTextAlignmentCenter, GColorBlack);
+  s_state_title_layer = create_text_layer(root, GRect(8, 68, bounds.size.w - 16, 36),
+                                          FONT_KEY_GOTHIC_28_BOLD, GTextAlignmentCenter, GColorBlack);
+  s_state_body_layer = create_text_layer(root, GRect(14, 108, bounds.size.w - 28, 58),
+                                         FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
+  s_state_footer_layer = create_text_layer(root, GRect(8, 184, bounds.size.w - 16, 28),
+                                           FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
 
   render();
 }
