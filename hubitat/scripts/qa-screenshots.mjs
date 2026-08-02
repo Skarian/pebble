@@ -247,19 +247,16 @@ export async function main() {
     const overview = await captureState(outputDir, session, 'overview', 'OVERVIEW');
     captured.push(overview);
     captured.push(await captureState(outputDir, session, 'motion', 'MOTION SENSOR', ['down']));
-    captured.push(await captureState(outputDir, session, 'contact', 'CONTACT SENSOR', ['down', 'down']));
-    captured.push(await captureState(outputDir, session, 'temperature', 'TEMPERATURE SENSOR', ['down', 'down']));
-    captured.push(await captureState(outputDir, session, 'switch', 'SWITCH DEVICE', ['down', 'down']));
-    captured.push(await captureState(outputDir, session, 'switch-control', 'SWITCH CONTROL', ['down', 'down']));
-    captured.push(await captureState(outputDir, session, 'lock', 'LOCK AND LOW BATTERY', ['down']));
-    captured.push(await captureState(outputDir, session, 'lock-detail', 'DEVICE DETAIL', ['down']));
-    captured.push(await captureState(outputDir, session, 'lock-control', 'LOCK CONTROL', ['down']));
+    captured.push(await captureState(outputDir, session, 'contact', 'CONTACT SENSOR', ['down']));
+    captured.push(await captureState(outputDir, session, 'temperature', 'TEMPERATURE SENSOR', ['down']));
+    captured.push(await captureState(outputDir, session, 'switch', 'SWITCH - SELECT TO TOGGLE', ['down']));
+    captured.push(await captureState(outputDir, session, 'lock', 'LOCK - SELECT TO UNLOCK', ['down']));
     captured.push(await captureState(outputDir, session, 'lock-confirm', 'LOCK CONFIRMATION', ['select']));
     captured.push(await captureState(outputDir, session, 'command-pending', 'COMMAND PENDING', ['select']));
     captured.push(await captureState(outputDir, session, 'command-success', 'SUCCESS - DEVICE UPDATED', [],
       commandResult(matrix.command.success.status, matrix.command.success.text, 2)));
 
-    await session.capture(join(scratch, 'next-command.png'), ['select', 'select', 'select']);
+    await session.capture(join(scratch, 'next-command.png'), ['select', 'select']);
     captured.push(await captureState(outputDir, session, 'command-failure', 'FAILURE - SELECT RETRIES', [],
       commandResult(matrix.command.failure.status, matrix.command.failure.text, 3)));
 
@@ -267,7 +264,7 @@ export async function main() {
     missing[1].attributes = {battery: 67};
     await inject(session, scratch, snapshotMessages(missing, {requestId: 3, partial: true}), 'missing');
     captured.push(await captureState(outputDir, session, 'partial-overview', 'PARTIAL DATA'));
-    captured.push(await captureState(outputDir, session, 'missing-value', 'MISSING DEVICE VALUE', ['down', 'down', 'down']));
+    captured.push(await captureState(outputDir, session, 'missing-value', 'MISSING DEVICE VALUE', ['down', 'down']));
 
     await inject(session, scratch, snapshotMessages(fakeRawDevices, {
       requestId: 3, fetchedAt: Math.floor(Date.now() / 1000) - 2 * 86400

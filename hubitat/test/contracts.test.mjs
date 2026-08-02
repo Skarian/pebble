@@ -11,13 +11,17 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /persist_write_data\(PERSIST_HEADER_KEY/);
   assert.match(watch, /response_id->value->uint16 != s_request_id/);
   assert.match(watch, /s_page_index \+ 1 < page_count\(\)/);
+  assert.match(watch, /return 1 \+ s_header\.count/);
+  assert.doesNotMatch(watch, /PAGE_DETAIL|PAGE_CONTROL|control_page_for|status_page_for/);
   assert.match(watch, /RESPONSE_TIMEOUT_MS 30000/);
   assert.match(watch, /if \(!s_has_cache\) request_refresh\(\)/);
   assert.match(watch, /if \(s_page_index == 0\) \{ request_refresh\(\); return; \}/);
   assert.doesNotMatch(watch, /tick_timer_service_subscribe|STALE/);
   assert.match(watch, /set_text\("HOME", "DEVICES", primary, secondary, meta, "UPDATED NOW"\)/);
-  assert.match(watch, /s_page_index = status_page_for\(s_command_device_index\)/);
+  assert.match(watch, /s_page_index = device_page_for\(s_command_device_index\)/);
   assert.match(watch, /persist_cache\(\);\n      s_status = STATUS_OK/);
+  assert.match(watch, /SELECT: TURN OFF/);
+  assert.match(watch, /KIND_LOCK && !s_confirming/);
 });
 
 test('phone owns the one secret and permits controls only after an authorized refresh', () => {
@@ -39,4 +43,5 @@ test('QA owns the shared emulator lock and never issues global emulator kills', 
   assert.doesNotMatch(qa, /pebble[^\n]*kill|stopEmulators/);
   assert.match(qa, /old timestamp must render exactly like the normal overview/i);
   assert.doesNotMatch(qa, /STALE LAST-GOOD DATA/);
+  assert.doesNotMatch(qa, /SWITCH CONTROL|DEVICE DETAIL|LOCK CONTROL/);
 });

@@ -25,7 +25,7 @@ test('selection is bounded and missing values remain explicit', () => {
   assert.equal(values.at(-1).id, '31');
   assert.equal(values[0].primary, 'no state');
   assert.equal(values[0].battery, 255);
-  assert.ok(1 + Model.MAX_DEVICES * 3 < 256, 'worst-case virtual list must fit uint8 page indexes');
+  assert.ok(1 + Model.MAX_DEVICES < 256, 'one-page-per-device list must fit uint8 page indexes');
 });
 
 test('generic safety sensors prefer their useful state over battery telemetry', () => {

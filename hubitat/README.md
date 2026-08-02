@@ -4,16 +4,17 @@ Hubitat is an Emery/Pebble Time 2 watchapp for checking a few sensors and
 devices at a glance. It can also turn authorized switches on or off and lock or
 unlock authorized locks. This build is configured for Neil's Maker API instance.
 
-- Press **Up** or **Down** to move through Overview, device, detail, and control
-  pages. The list stops at both ends.
+- Press **Up** or **Down** to move through Overview and one page for each
+  device or sensor. The list stops at both ends.
 - Press **Select** on Overview to refresh.
-- Press **Select** on a controllable device to open its Control page.
-- Lock controls ask for a second Select press before sending the command.
+- Press **Select** on a switch to perform the action shown at the bottom.
+- Locks ask for a second Select press before sending the command.
 - A successful command returns to that device with its new value. If a command
   fails, press **Select** to retry or **Up/Down** to return to the list.
 
-Each screen keeps one device, value, or action in focus. Battery, temperature,
-or humidity appears only when that device reports it.
+Each device or sensor has one screen. It keeps the current state in focus and
+shows battery, temperature, or humidity only when useful. There are no separate
+Detail or Action pages.
 
 The watch saves the last successful update. Reopening uses that saved data
 without contacting Hubitat. If no saved data exists, the app refreshes once.
@@ -79,8 +80,8 @@ ignored `qa-results/` directory. The production C and PebbleKit JS contain no
 fixtures, QA modes, scenario names, or test navigation.
 
 The board covers setup, loading with and without cache, overview, motion,
-contact, temperature, battery, switch, lock, detail, safe control, dangerous
-confirmation, empty authorization, missing and partial data, auth, phone/network,
+contact, temperature, battery, direct switch control, lock confirmation,
+empty authorization, missing and partial data, auth, phone/network,
 timeout, service, and command pending/success/failure. It also verifies that an
 old timestamp does not add a stale-data screen or change the Overview.
 

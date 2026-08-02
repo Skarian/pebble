@@ -23,7 +23,6 @@ enum {
 enum { KIND_UNKNOWN = 0, KIND_MOTION = 1, KIND_CONTACT = 2, KIND_TEMPERATURE = 3,
        KIND_SWITCH = 4, KIND_LOCK = 5 };
 enum { CONTROL_ON = 1, CONTROL_OFF = 2, CONTROL_LOCK = 4, CONTROL_UNLOCK = 8 };
-enum { PAGE_STATUS = 0, PAGE_DETAIL = 1, PAGE_CONTROL = 2 };
 
 typedef struct {
   char id[12];
@@ -87,42 +86,17 @@ static bool device_has_control(const DeviceState *device) {
 }
 
 static uint8_t page_count(void) {
-  uint8_t count = 1;
-  for (uint8_t i = 0; i < s_header.count; i++) {
-    count += device_has_control(&s_devices[i]) ? 3 : 2;
-  }
-  return count;
+  return 1 + s_header.count;
 }
 
-static bool decode_page(uint8_t page, uint8_t *device_index, uint8_t *page_type) {
-  if (page == 0) return false;
-  uint8_t cursor = 1;
-  for (uint8_t i = 0; i < s_header.count; i++) {
-    uint8_t pages = device_has_control(&s_devices[i]) ? 3 : 2;
-    if (page < cursor + pages) {
-      *device_index = i;
-      *page_type = page - cursor;
-      return true;
-    }
-    cursor += pages;
-  }
-  return false;
+static bool decode_page(uint8_t page, uint8_t *device_index) {
+  if (page == 0 || page > s_header.count) return false;
+  *device_index = page - 1;
+  return true;
 }
 
-static uint8_t control_page_for(uint8_t device_index) {
-  uint8_t page = 1;
-  for (uint8_t i = 0; i < device_index; i++) {
-    page += device_has_control(&s_devices[i]) ? 3 : 2;
-  }
-  return page + PAGE_CONTROL;
-}
-
-static uint8_t status_page_for(uint8_t device_index) {
-  uint8_t page = 1;
-  for (uint8_t i = 0; i < device_index; i++) {
-    page += device_has_control(&s_devices[i]) ? 3 : 2;
-  }
-  return page;
+static uint8_t device_page_for(uint8_t device_index) {
+  return device_index + 1;
 }
 
 static void persist_cache(void) {
@@ -174,17 +148,6 @@ static void request_refresh(void) {
   render();
 }
 
-static const char *kind_name(uint8_t kind) {
-  switch (kind) {
-    case KIND_MOTION: return "MOTION";
-    case KIND_CONTACT: return "CONTACT";
-    case KIND_TEMPERATURE: return "TEMPERATURE";
-    case KIND_SWITCH: return "SWITCH";
-    case KIND_LOCK: return "LOCK";
-    default: return "SENSOR";
-  }
-}
-
 static const char *desired_action(const DeviceState *device) {
   if (device->kind == KIND_SWITCH) {
     if (strcmp(device->primary, "on") == 0 && (device->control_flags & CONTROL_OFF)) return "off";
@@ -205,18 +168,26 @@ static const char *action_label(const char *action) {
   return "UNAVAILABLE";
 }
 
+static const char *action_instruction(const char *action) {
+  if (strcmp(action, "on") == 0) return "SELECT: TURN ON";
+  if (strcmp(action, "off") == 0) return "SELECT: TURN OFF";
+  if (strcmp(action, "lock") == 0) return "SELECT: LOCK";
+  if (strcmp(action, "unlock") == 0) return "SELECT: UNLOCK";
+  return "";
+}
+
 static void send_control(uint8_t device_index) {
   DeviceState *device = &s_devices[device_index];
   const char *action = desired_action(device);
   if (!action[0]) return;
   s_command_device_index = device_index;
+  snprintf(s_action, sizeof(s_action), "%s", action);
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK) {
     show_failure(STATUS_COMMAND_FAILURE, "Cannot contact phone");
     return;
   }
   s_request_id += 1;
-  snprintf(s_action, sizeof(s_action), "%s", action);
   dict_write_uint8(out, MESSAGE_KEY_PROTOCOL, 1);
   dict_write_uint8(out, MESSAGE_KEY_COMMAND, CMD_CONTROL);
   dict_write_uint16(out, MESSAGE_KEY_REQUEST_ID, s_request_id);
@@ -345,32 +316,24 @@ static void render(void) {
     return;
   }
 
-  uint8_t device_index = 0, page_type = 0;
-  if (!decode_page(s_page_index, &device_index, &page_type)) return;
+  uint8_t device_index = 0;
+  if (!decode_page(s_page_index, &device_index)) return;
   DeviceState *device = &s_devices[device_index];
-  if (page_type == PAGE_STATUS) {
+  const char *action = desired_action(device);
+  if (device->kind == KIND_LOCK && s_confirming) {
+    configure_data_layout(false, false, true);
+    set_text("CONFIRM", device->label, action_label(action), "", "", "PRESS SELECT AGAIN");
+  } else if (device_has_control(device)) {
+    snprintf(meta, sizeof(meta), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
+    configure_data_layout(true, false, true);
+    set_text("DEVICE", device->label, device->primary[0] ? device->primary : "MISSING",
+             meta, "", action_instruction(action));
+  } else {
     snprintf(meta, sizeof(meta), "%s", device->secondary);
     snprintf(footer, sizeof(footer), device->battery == 255 ? "BATTERY --" : "BATTERY %u%%", device->battery);
     configure_data_layout(meta[0] != '\0', false, true);
     set_text(device->kind <= KIND_TEMPERATURE ? "SENSOR" : "DEVICE", device->label,
              device->primary[0] ? device->primary : "MISSING", meta, "", footer);
-  } else if (page_type == PAGE_DETAIL) {
-    snprintf(secondary, sizeof(secondary), "%s", kind_name(device->kind));
-    if (device->battery == 255) snprintf(meta, sizeof(meta), "BATTERY --");
-    else snprintf(meta, sizeof(meta), "BATTERY %u%%", device->battery);
-    configure_data_layout(true, false, false);
-    set_text("DETAIL", device->label, secondary, meta, "", "");
-  } else {
-    const char *action = desired_action(device);
-    snprintf(secondary, sizeof(secondary), "%s", action_label(action));
-    configure_data_layout(false, false, true);
-    if (device->kind == KIND_LOCK && s_confirming) {
-      set_text("CONFIRM", device->label, secondary, "", "", "PRESS SELECT AGAIN");
-    } else if (device->kind == KIND_LOCK) {
-      set_text("ACTION", device->label, secondary, "", "", "PRESS SELECT");
-    } else {
-      set_text("ACTION", device->label, secondary, "", "", "PRESS SELECT");
-    }
   }
 }
 
@@ -446,10 +409,10 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
       else if (strcmp(s_action, "unlock") == 0) snprintf(device->primary, sizeof(device->primary), "unlocked");
       persist_cache();
       s_status = STATUS_OK;
-      s_page_index = status_page_for(s_command_device_index);
+      s_page_index = device_page_for(s_command_device_index);
     } else {
       s_status = STATUS_COMMAND_FAILURE;
-      s_page_index = control_page_for(s_command_device_index);
+      s_page_index = device_page_for(s_command_device_index);
     }
     render();
     return;
@@ -480,7 +443,10 @@ static void clear_result(void) {
 
 static void up_click(ClickRecognizerRef recognizer, void *context) {
   clear_result();
-  if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) return;
+  if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
+    if (s_has_cache) { s_status = STATUS_OK; s_page_index = 0; render(); }
+    return;
+  }
   s_confirming = false;
   if (s_page_index > 0) s_page_index -= 1;
   render();
@@ -502,15 +468,8 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
   if (s_status == STATUS_COMMAND_FAILURE) { send_control(s_command_device_index); return; }
   if (s_status != STATUS_OK && s_status != STATUS_PARTIAL) { request_refresh(); return; }
   if (s_page_index == 0) { request_refresh(); return; }
-  uint8_t device_index = 0, page_type = 0;
-  if (!decode_page(s_page_index, &device_index, &page_type)) return;
-  if (page_type != PAGE_CONTROL && device_has_control(&s_devices[device_index])) {
-    s_page_index = control_page_for(device_index);
-    s_confirming = false;
-    render();
-    return;
-  }
-  if (page_type != PAGE_CONTROL) return;
+  uint8_t device_index = 0;
+  if (!decode_page(s_page_index, &device_index) || !device_has_control(&s_devices[device_index])) return;
   if (s_devices[device_index].kind == KIND_LOCK && !s_confirming) {
     s_confirming = true;
     render();
