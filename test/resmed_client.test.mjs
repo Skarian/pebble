@@ -159,5 +159,39 @@ test('OAuth state mismatch is rejected before token exchange', async () => {
   const result = await fetchRecords(client);
   assert.equal(result.error.type, 'auth');
   assert.equal(result.error.message, 'ResMed authorization failed');
+  assert.equal(result.error.replay, 'parse:authorization:missing-or-mismatched-code');
   assert.equal(requests.length, 2);
+});
+
+test('service failures carry a durable replay recipe without response contents', async () => {
+  const requests = [];
+  const Xhr = fakeXhr([
+    ...successFlow([]).slice(0, 3),
+    complete(503, JSON.stringify({code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'})),
+    complete(503, JSON.stringify({code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'}))
+  ], requests);
+  const client = createClient(Xhr, memoryStorage(), {
+    requestTimeoutMs: 0,
+    retryDelay: (callback) => callback()
+  });
+  const result = await fetchRecords(client);
+  assert.equal(result.error.step, 'sleep records');
+  assert.equal(result.error.status, 503);
+  assert.equal(result.error.attempts, 2);
+  assert.equal(result.error.code, 'UPSTREAM_UNAVAILABLE');
+  assert.equal(result.error.replay, 'http:sleep-records:503');
+  assert.equal(result.error.previous.replay, 'http:sleep-records:503');
+  assert.match(result.error.shape, /error:string/);
+  assert.doesNotMatch(JSON.stringify(result.error), /private upstream detail/);
+});
+
+test('invalid sleep payload records its safe structural fingerprint', async () => {
+  const requests = [];
+  const Xhr = fakeXhr([
+    ...successFlow([]).slice(0, 3),
+    complete(200, JSON.stringify({data: {getPatientWrapper: {sleepRecords: {items: null}}}}))
+  ], requests);
+  const result = await fetchRecords(createClient(Xhr, memoryStorage(), {requestTimeoutMs: 0}));
+  assert.equal(result.error.replay, 'parse:sleep-records:missing-items');
+  assert.match(result.error.shape, /items=object/);
 });

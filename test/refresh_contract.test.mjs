@@ -7,17 +7,32 @@ const phone = readFileSync(new URL('../src/pkjs/index.js', import.meta.url), 'ut
 const dev = readFileSync(new URL('../scripts/dev-emulator.mjs', import.meta.url), 'utf8');
 
 test('launch refreshes only when yesterday is not already cached', () => {
-  assert.match(watch, /bool refresh_on_launch = !cache_has_yesterday\(\);/);
-  assert.match(watch, /if \(refresh_on_launch\) request_scores\(\);/);
+  assert.match(watch, /bool refresh_on_launch = automatic_launch \|\| !cache_has_yesterday\(\);/);
+  assert.match(watch, /else if \(refresh_on_launch\) request_scores\(false\);/);
   assert.match(watch, /s_cache\.dates\[0\] == packed_yesterday\(\)/);
   assert.match(watch, /s_cache\.scores\[0\] <= 100/);
 });
 
-test('refresh is blocking, explicit, and has no half-hour poll', () => {
+test('manual refresh remains blocking and explicit', () => {
   assert.match(watch, /#define RESPONSE_TIMEOUT_MS 30000/);
-  assert.match(watch, /if \(!s_loading\) request_scores\(\);/);
+  assert.match(watch, /if \(!s_loading\) request_scores\(false\);/);
   const tick = watch.slice(watch.indexOf('static void tick_handler'), watch.indexOf('static void init'));
-  assert.doesNotMatch(tick, /request_scores/);
+  assert.doesNotMatch(tick.slice(0, tick.indexOf('static void wakeup_handler')), /request_scores/);
+});
+
+test('automatic checks run every two hours from 10 AM and only reveal a newer record', () => {
+  assert.match(watch, /#define WAKEUP_START_HOUR 10/);
+  assert.match(watch, /#define WAKEUP_LAST_HOUR 22/);
+  assert.match(watch, /#define WAKEUP_INTERVAL_HOURS 2/);
+  assert.match(watch, /launch_reason\(\) == APP_LAUNCH_WAKEUP/);
+  assert.match(watch, /schedule_next_wakeup\(false\);[\s\S]*start_automatic_check\(\);/);
+  assert.match(watch, /schedule_next_wakeup\(true\);[\s\S]*s_selected_day = 0/);
+  assert.match(watch, /COMMAND_PHONE_READY[\s\S]*request_scores\(true\);/);
+  assert.match(phone, /addEventListener\('ready'[\s\S]*COMMAND_PHONE_READY/);
+  assert.match(watch, /latest_available_date\(&s_cache\) > previous_latest_date/);
+  assert.match(watch, /finish_automatic_check\(received_records && has_new_record, result_status\)/);
+  assert.match(watch, /if \(!s_window_visible\) \{[\s\S]*window_stack_pop_all\(false\);/);
+  assert.match(watch, /if \(!s_window_visible\) \{[\s\S]*window_stack_push\(s_window, true\);/);
 });
 
 test('phone sends only the final ResMed result and dev does not wait for a request', () => {

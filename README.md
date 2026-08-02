@@ -12,20 +12,50 @@ was updated.
   seven-day Score, Usage, Events, Mask Off, and Leak graphs.
 - Press **Select** to force a blocking refresh.
 - Open the app's **Settings** in the Pebble phone app to connect ResMed.
+- Starting at 10 AM watch time, CPAP checks silently every two hours through
+  10 PM for a newer available score. It opens itself only when one arrives.
 
 The watch persists the last successful seven-day snapshot. Once yesterday's
 score is present, reopening the app uses that snapshot without contacting
 ResMed. A new day or a missing score triggers one launch refresh; Select always
 forces one. During a refresh the app shows `SYNCING...` until the attempt either
-succeeds or produces an error. It does not poll while open or refresh in the
-background. No ResMed credential, API token, email address, or device identifier
-is ever sent to or stored on the watch.
+succeeds or produces an error. Automatic checks are different: the watch arms
+the next wakeup before requesting data, shows no loading or failure screen, and
+exits when ResMed still has no newer score. A successful update pauses checks
+until 10 AM the following day; otherwise they continue every two hours through
+10 PM and resume at 10 AM. The app compares the newest available record rather
+than waiting for a particular calendar date, so a missing day does not prevent
+the following day's score from opening the app. No ResMed credential, API token,
+email address, or device identifier is ever sent to or stored on the watch.
 
 The phone retries the complete ResMed operation once after a one-second delay
 only for connection failures, timeouts, and upstream `502`, `503`, or `504`
 responses. Authentication failures, rate limits, and other client errors are
 never retried. The watch and phone each allow 30 seconds for the blocking
 refresh; individual upstream HTTP requests time out after 12 seconds.
+
+### Durable diagnostics
+
+The phone retains the latest twelve failed ResMed operations in its private
+PebbleKit JS storage. Each entry contains the time, refresh or connection
+context, failing protocol step, HTTP status, elapsed time, both retry attempts,
+and a replay code plus redacted response structure. Only JSON keys and value
+types are retained from an upstream response; passwords, OAuth tokens,
+authorization codes, email addresses, response values, and sleep records are
+not logged.
+
+There are two ways to retrieve an older failure:
+
+1. Open CPAP's settings in the Pebble mobile app and tap **Copy diagnostics**.
+2. Start `pebble logs --phone PHONE_IP`, then open CPAP's settings. The phone
+   re-emits every saved entry with the `CPAP_DIAGNOSTIC` prefix without making
+   a ResMed request.
+
+The `replay` field identifies the exact simulated failure to construct in the
+client tests, such as `http:sleep-records:503`,
+`transport:authorization:timeout`, or
+`parse:sleep-records:missing-items`. Diagnostics survive app and phone runtime
+restarts, but uninstalling CPAP or clearing the Pebble app's data removes them.
 
 The day details and graphs form one bounded vertical list: the oldest day is at
 the top, yesterday sits below the other day pages, and the five graphs sit below

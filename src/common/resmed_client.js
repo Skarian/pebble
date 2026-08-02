@@ -60,6 +60,34 @@ function parseJson(text) {
   }
 }
 
+function valueShape(value, depth) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    return 'array(' + value.length + ')' +
+      (value.length && depth < 4 ? '[' + valueShape(value[0], depth + 1) + ']' : '');
+  }
+  if (typeof value !== 'object') return typeof value;
+  if (depth >= 4) return 'object';
+  return '{' + Object.keys(value).sort().slice(0, 16).map(function (key) {
+    return key + ':' + valueShape(value[key], depth + 1);
+  }).join(',') + '}';
+}
+
+function responseShape(text) {
+  if (!text) return 'empty';
+  var parsed = parseJson(text);
+  if (parsed === null) return 'invalid-json(' + text.length + ')';
+  return valueShape(parsed, 0).slice(0, 500);
+}
+
+function responseCode(payload) {
+  var candidate = payload && (payload.errorCode || payload.code ||
+    (payload.errors && payload.errors[0] && payload.errors[0].extensions &&
+      payload.errors[0].extensions.code));
+  return typeof candidate === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(candidate) ?
+    candidate : '';
+}
+
 function errorForResponse(response, step) {
   var body = parseJson(response.text) || {};
   var auth = response.status === 401 || response.status === 403 ||
@@ -70,8 +98,30 @@ function errorForResponse(response, step) {
     message: auth ? 'ResMed sign-in failed' : 'ResMed unavailable',
     transient: transient,
     step: step,
-    status: response.status
+    status: response.status,
+    elapsedMs: response.elapsedMs || 0,
+    code: responseCode(body),
+    replay: 'http:' + step.replace(/ /g, '-') + ':' + response.status +
+      (body.errorCode === 'E0000004' ? ':invalid-credentials' : ''),
+    shape: responseShape(response.text)
   };
+}
+
+function transportError(type, message, step) {
+  return {
+    type: 'network', message: message, transient: true, step: step, status: 0,
+    replay: 'transport:' + step.replace(/ /g, '-') + ':' + type
+  };
+}
+
+function sleepShape(payload) {
+  var wrapper = payload && payload.data && payload.data.getPatientWrapper;
+  var records = wrapper && wrapper.sleepRecords;
+  var items = records && records.items;
+  return 'json=' + Boolean(payload) + ',errors=' + Boolean(payload && payload.errors) +
+    ',data=' + typeof (payload && payload.data) + ',wrapper=' + typeof wrapper +
+    ',records=' + typeof records + ',items=' +
+    (Array.isArray(items) ? 'array(' + items.length + ')' : typeof items);
 }
 
 function formatDate(date) {
@@ -90,11 +140,14 @@ function createClient(Xhr, storage, options) {
     var xhr = new Xhr();
     var finished = false;
     var timer = null;
+    var startedAt = Date.now();
 
     function finish(error, response) {
       if (finished) return;
       finished = true;
       if (timer !== null) clearTimer(timer);
+      if (error) error.elapsedMs = Date.now() - startedAt;
+      if (response) response.elapsedMs = Date.now() - startedAt;
       callback(error, response);
     }
 
@@ -105,22 +158,25 @@ function createClient(Xhr, storage, options) {
     xhr.onload = function () {
       finish(null, {status: Number(xhr.status || 0), text: xhr.responseText || ''});
     };
+    var step = url.indexOf(CONFIG.authnUrl) === 0 ? 'authentication' :
+      url.indexOf(CONFIG.authorizeUrl) === 0 ? 'authorization' :
+      url.indexOf(CONFIG.tokenUrl) === 0 ? 'token exchange' : 'sleep records';
     xhr.onerror = function () {
-      finish({type: 'network', message: 'Phone cannot be reached', transient: true});
+      finish(transportError('network', 'Phone cannot be reached', step));
     };
     xhr.ontimeout = function () {
-      finish({type: 'network', message: 'ResMed timed out', transient: true});
+      finish(transportError('timeout', 'ResMed timed out', step));
     };
     xhr.onloadend = function () {
       if (!finished && (!xhr.status || xhr.status === 0)) {
-        finish({type: 'network', message: 'Phone cannot be reached', transient: true});
+        finish(transportError('network', 'Phone cannot be reached', step));
       }
     };
     if (requestTimeoutMs > 0) {
       xhr.timeout = requestTimeoutMs;
       timer = setTimer(function () {
         try { xhr.abort(); } catch (ignored) {}
-        finish({type: 'network', message: 'ResMed timed out', transient: true});
+        finish(transportError('timeout', 'ResMed timed out', step));
       }, requestTimeoutMs);
     }
     xhr.send(body === undefined ? null : body);
@@ -176,15 +232,21 @@ function createClient(Xhr, storage, options) {
       }
       var auth = parseJson(authResponse.text);
       if (!auth) {
-        callback({type: 'service', message: 'Invalid ResMed response'});
+        callback({type: 'service', message: 'Invalid ResMed response',
+          step: 'authentication', status: authResponse.status, elapsedMs: authResponse.elapsedMs,
+          replay: 'parse:authentication:invalid-json'});
         return;
       }
       if (auth.status === 'MFA_REQUIRED') {
-        callback({type: 'auth', message: 'ResMed MFA is not supported'});
+        callback({type: 'auth', message: 'ResMed MFA is not supported',
+          step: 'authentication', status: authResponse.status, elapsedMs: authResponse.elapsedMs,
+          replay: 'parse:authentication:mfa-required'});
         return;
       }
       if (auth.status !== 'SUCCESS' || !auth.sessionToken) {
-        callback({type: 'auth', message: 'ResMed sign-in failed'});
+        callback({type: 'auth', message: 'ResMed sign-in failed',
+          step: 'authentication', status: authResponse.status, elapsedMs: authResponse.elapsedMs,
+          replay: 'parse:authentication:missing-session-token'});
         return;
       }
 
@@ -211,7 +273,10 @@ function createClient(Xhr, storage, options) {
         }
         var code = parseAuthorization(authorizeResponse.text, state);
         if (!code) {
-          callback({type: 'auth', message: 'ResMed authorization failed'});
+          callback({type: 'auth', message: 'ResMed authorization failed',
+            step: 'authorization', status: authorizeResponse.status,
+            elapsedMs: authorizeResponse.elapsedMs,
+            replay: 'parse:authorization:missing-or-mismatched-code'});
           return;
         }
         request('POST', CONFIG.tokenUrl, {
@@ -231,7 +296,10 @@ function createClient(Xhr, storage, options) {
           }
           var payload = parseJson(tokenResponse.text);
           if (!payload || !payload.access_token || !payload.id_token) {
-            callback({type: 'service', message: 'Invalid ResMed token response'});
+            callback({type: 'service', message: 'Invalid ResMed token response',
+              step: 'token exchange', status: tokenResponse.status,
+              elapsedMs: tokenResponse.elapsedMs,
+              replay: 'parse:token-exchange:missing-token'});
             return;
           }
           callback(null, saveToken(payload), false);
@@ -272,7 +340,11 @@ function createClient(Xhr, storage, options) {
       var items = payload && payload.data && payload.data.getPatientWrapper &&
         payload.data.getPatientWrapper.sleepRecords && payload.data.getPatientWrapper.sleepRecords.items;
       if (!payload || payload.errors || !Array.isArray(items)) {
-        callback({type: 'service', message: 'Invalid ResMed sleep data'});
+        var reason = !payload ? 'invalid-json' : payload.errors ? 'graphql-errors' : 'missing-items';
+        callback({type: 'service', message: 'Invalid ResMed sleep data',
+          step: 'sleep records', status: response.status, elapsedMs: response.elapsedMs,
+          code: responseCode(payload), replay: 'parse:sleep-records:' + reason,
+          shape: sleepShape(payload)});
         return;
       }
       callback(null, items.map(function (record) {
@@ -308,10 +380,19 @@ function createClient(Xhr, storage, options) {
   function fetchSleepRecords(credentials, callback) {
     fetchOnce(credentials, function (error, records) {
       if (!error || !error.transient) {
+        if (error) error.attempts = 1;
         callback(error, records);
         return;
       }
-      retryDelay(function () { fetchOnce(credentials, callback); });
+      retryDelay(function () {
+        fetchOnce(credentials, function (retryError, retryRecords) {
+          if (retryError) {
+            retryError.attempts = 2;
+            retryError.previous = error;
+          }
+          callback(retryError, retryRecords);
+        });
+      });
     });
   }
 

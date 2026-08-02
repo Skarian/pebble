@@ -4,6 +4,11 @@
 #define CACHE_VERSION 3
 #define PERSIST_KEY_CACHE 100
 #define RESPONSE_TIMEOUT_MS 30000
+#define WAKEUP_START_HOUR 10
+#define WAKEUP_LAST_HOUR 22
+#define WAKEUP_INTERVAL_HOURS 2
+#define WAKEUP_COLLISION_STEP_SECONDS (2 * 60)
+#define WAKEUP_SCHEDULE_ATTEMPTS 8
 #define SCORE_UNAVAILABLE 255
 #define METRIC_UNAVAILABLE 65535
 #define COUNT_UNAVAILABLE 255
@@ -11,6 +16,7 @@
 
 enum {
   COMMAND_FETCH = 1,
+  COMMAND_PHONE_READY = 2,
 };
 
 enum {
@@ -45,6 +51,7 @@ typedef struct {
 } ScoreCache;
 
 static Window *s_window;
+static Window *s_probe_window;
 static TextLayer *s_title_layer;
 static TextLayer *s_date_layer;
 static TextLayer *s_score_label_layer;
@@ -67,6 +74,11 @@ static bool s_has_cache;
 static bool s_loading;
 static uint8_t s_status;
 static char s_error_text[49];
+static bool s_automatic_check;
+static bool s_window_visible;
+static bool s_phone_ready;
+static bool s_waiting_for_phone;
+static uint8_t s_status_before_automatic_check;
 
 static const char *WEEKDAYS[] = {
   "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
@@ -76,8 +88,72 @@ static const char *GRAPH_TITLES[] = {
   "", "SCORE", "USAGE", "EVENTS", "MASK OFF", "LEAK"
 };
 
-static void request_scores(void);
+static void request_scores(bool automatic);
 static void render(void);
+
+static uint32_t latest_available_date(const ScoreCache *cache) {
+  for (int i = 0; i < DAYS; i++) {
+    if (cache->dates[i] && cache->scores[i] <= 100) {
+      return cache->dates[i];
+    }
+  }
+  return 0;
+}
+
+static void schedule_next_wakeup(bool tomorrow) {
+  wakeup_cancel_all();
+  time_t now = time(NULL);
+  struct tm next = *localtime(&now);
+  next.tm_min = 0;
+  next.tm_sec = 0;
+  if (tomorrow || next.tm_hour >= WAKEUP_LAST_HOUR) {
+    next.tm_mday += 1;
+    next.tm_hour = WAKEUP_START_HOUR;
+  } else if (next.tm_hour < WAKEUP_START_HOUR) {
+    next.tm_hour = WAKEUP_START_HOUR;
+  } else {
+    next.tm_hour = WAKEUP_START_HOUR +
+      ((next.tm_hour - WAKEUP_START_HOUR) / WAKEUP_INTERVAL_HOURS + 1) *
+        WAKEUP_INTERVAL_HOURS;
+  }
+  time_t base = mktime(&next);
+  for (int attempt = 0; attempt < WAKEUP_SCHEDULE_ATTEMPTS; attempt++) {
+    WakeupId id = wakeup_schedule(
+      base + attempt * WAKEUP_COLLISION_STEP_SECONDS, 0, false);
+    if (id >= 0) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "Next automatic check scheduled: %ld", (long)id);
+      return;
+    }
+  }
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Could not schedule next automatic check");
+}
+
+static void finish_automatic_check(bool show_new_record, uint8_t result_status) {
+  s_loading = false;
+  s_automatic_check = false;
+  s_waiting_for_phone = false;
+
+  if (!show_new_record) {
+    s_status = s_status_before_automatic_check;
+    if (!s_window_visible) {
+      window_stack_pop_all(false);
+    }
+    return;
+  }
+
+  s_status = result_status;
+  schedule_next_wakeup(true);
+  s_selected_day = 0;
+  s_view = VIEW_DAY;
+  if (!s_window_visible) {
+    s_window_visible = true;
+    window_stack_push(s_window, false);
+    window_stack_remove(s_probe_window, false);
+  } else {
+    render();
+  }
+  vibes_short_pulse();
+}
 
 static int day_of_week(int year, int month, int day) {
   static const int offsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
@@ -451,6 +527,9 @@ static void render_graph(void) {
 }
 
 static void render(void) {
+  if (!s_window_visible) {
+    return;
+  }
   if (s_loading) {
     render_state("SYNCING...", "", "");
     return;
@@ -486,6 +565,10 @@ static void response_timeout(void *context) {
   if (!s_loading) {
     return;
   }
+  if (s_automatic_check) {
+    finish_automatic_check(false, STATUS_NETWORK_ERROR);
+    return;
+  }
   s_loading = false;
   s_status = STATUS_NETWORK_ERROR;
   render();
@@ -498,10 +581,32 @@ static void cancel_response_timer(void) {
   }
 }
 
-static void request_scores(void) {
+static void start_automatic_check(void) {
+  if (s_phone_ready) {
+    request_scores(true);
+    return;
+  }
+  s_automatic_check = true;
+  s_waiting_for_phone = true;
+  s_status_before_automatic_check = s_status;
+  s_loading = true;
+  cancel_response_timer();
+  s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
+}
+
+static void request_scores(bool automatic) {
+  s_automatic_check = automatic;
+  if (automatic) {
+    s_status_before_automatic_check = s_status;
+  }
+
   DictionaryIterator *out;
   AppMessageResult result = app_message_outbox_begin(&out);
   if (result != APP_MSG_OK) {
+    if (automatic) {
+      finish_automatic_check(false, STATUS_NETWORK_ERROR);
+      return;
+    }
     s_loading = false;
     s_status = STATUS_NETWORK_ERROR;
     render();
@@ -518,7 +623,9 @@ static void request_scores(void) {
   s_status = STATUS_OK;
   cancel_response_timer();
   s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
-  render();
+  if (!automatic) {
+    render();
+  }
 }
 
 static uint32_t tuple_uint32(DictionaryIterator *iterator, uint32_t key, uint32_t fallback) {
@@ -529,6 +636,16 @@ static uint32_t tuple_uint32(DictionaryIterator *iterator, uint32_t key, uint32_
 static void inbox_received(DictionaryIterator *iterator, void *context) {
   Tuple *protocol = dict_find(iterator, MESSAGE_KEY_PROTOCOL);
   if (protocol && protocol->value->uint8 != 1) {
+    return;
+  }
+
+  Tuple *command = dict_find(iterator, MESSAGE_KEY_COMMAND);
+  if (command && command->value->uint8 == COMMAND_PHONE_READY) {
+    s_phone_ready = true;
+    if (s_waiting_for_phone) {
+      s_waiting_for_phone = false;
+      request_scores(true);
+    }
     return;
   }
 
@@ -543,7 +660,9 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     s_loading = true;
     s_status = STATUS_OK;
     s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
-    render();
+    if (!s_automatic_check) {
+      render();
+    }
     return;
   }
 
@@ -559,7 +678,11 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     s_error_text[0] = '\0';
   }
 
-  if (s_status == STATUS_OK || s_status == STATUS_PARTIAL) {
+  bool received_records = s_status == STATUS_OK || s_status == STATUS_PARTIAL;
+  uint8_t result_status = s_status;
+  uint32_t previous_latest_date = s_has_cache ? latest_available_date(&s_cache) : 0;
+  bool has_new_record = false;
+  if (received_records) {
     const uint32_t date_keys[DAYS] = {
       MESSAGE_KEY_DAY0_DATE, MESSAGE_KEY_DAY1_DATE, MESSAGE_KEY_DAY2_DATE,
       MESSAGE_KEY_DAY3_DATE, MESSAGE_KEY_DAY4_DATE, MESSAGE_KEY_DAY5_DATE,
@@ -612,8 +735,13 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     s_cache = next;
     s_has_cache = true;
     persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
+    has_new_record = latest_available_date(&s_cache) > previous_latest_date;
   }
 
+  if (s_automatic_check) {
+    finish_automatic_check(received_records && has_new_record, result_status);
+    return;
+  }
   render();
 }
 
@@ -624,6 +752,10 @@ static void inbox_dropped(AppMessageResult reason, void *context) {
 static void outbox_failed(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
   APP_LOG(APP_LOG_LEVEL_WARNING, "Outbox failed: %d", reason);
   cancel_response_timer();
+  if (s_automatic_check) {
+    finish_automatic_check(false, STATUS_NETWORK_ERROR);
+    return;
+  }
   s_loading = false;
   s_status = STATUS_NETWORK_ERROR;
   render();
@@ -659,7 +791,7 @@ static void down_click(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
-  if (!s_loading) request_scores();
+  if (!s_loading) request_scores(false);
 }
 
 static void click_config_provider(void *context) {
@@ -749,6 +881,13 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   }
 }
 
+static void wakeup_handler(WakeupId wakeup_id, int32_t cookie) {
+  schedule_next_wakeup(false);
+  if (!s_loading) {
+    start_automatic_check();
+  }
+}
+
 static void init(void) {
   memset(&s_cache, 0, sizeof(s_cache));
   for (int i = 0; i < DAYS; i++) {
@@ -761,6 +900,9 @@ static void init(void) {
   s_status = STATUS_OK;
   s_selected_day = 0;
   s_view = VIEW_DAY;
+  bool automatic_launch = launch_reason() == APP_LAUNCH_WAKEUP;
+
+  wakeup_service_subscribe(wakeup_handler);
 
   if (persist_exists(PERSIST_KEY_CACHE) &&
       persist_get_size(PERSIST_KEY_CACHE) == (int)sizeof(s_cache) &&
@@ -768,7 +910,8 @@ static void init(void) {
       s_cache.version == CACHE_VERSION) {
     s_has_cache = true;
   }
-  bool refresh_on_launch = !cache_has_yesterday();
+  schedule_next_wakeup(!automatic_launch && cache_has_yesterday());
+  bool refresh_on_launch = automatic_launch || !cache_has_yesterday();
   s_loading = refresh_on_launch;
 
   s_window = window_create();
@@ -784,14 +927,23 @@ static void init(void) {
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(1024, 64);
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
-  window_stack_push(s_window, true);
-  if (refresh_on_launch) request_scores();
+  if (automatic_launch) {
+    s_probe_window = window_create();
+    window_set_background_color(s_probe_window, GColorClear);
+    window_stack_push(s_probe_window, false);
+  } else {
+    s_window_visible = true;
+    window_stack_push(s_window, true);
+  }
+  if (automatic_launch) start_automatic_check();
+  else if (refresh_on_launch) request_scores(false);
 }
 
 static void deinit(void) {
   cancel_response_timer();
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
+  if (s_probe_window) window_destroy(s_probe_window);
   window_destroy(s_window);
 }
 

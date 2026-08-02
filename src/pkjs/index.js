@@ -6,6 +6,8 @@ var xhrJson = XHR(XMLHttpRequest);
 var ResMed = require('../common/resmed_client');
 var resMed = ResMed(XMLHttpRequest, localStorage);
 var decodeSettingsResponse = require('../common/settings_response');
+var Diagnostics = require('../common/diagnostics');
+var diagnostics = Diagnostics(localStorage);
 
 var SETTINGS_KEY = 'cpap.settings.v2';
 var STATUS_UNCONFIGURED = 1;
@@ -13,6 +15,7 @@ var STATUS_AUTH_REQUIRED = 2;
 var STATUS_NETWORK_ERROR = 3;
 var STATUS_SERVICE_ERROR = 4;
 var STATUS_SYNCING = 6;
+var COMMAND_PHONE_READY = 2;
 var lastRequestId = 0;
 var requestInFlight = false;
 var DEV_BRIDGE_URL = 'http://127.0.0.1:8787';
@@ -52,8 +55,8 @@ function sendStatus(status, requestId, text) {
 
 function logResMedError(context, error) {
   error = error || {};
-  console.log('CPAP ResMed ' + context + ' failed: type=' + (error.type || 'unknown') +
-    ' step=' + (error.step || 'unknown') + ' status=' + (error.status || 0));
+  var entry = diagnostics.record(context, error);
+  console.log('CPAP_DIAGNOSTIC ' + JSON.stringify(entry));
 }
 
 function trimTrailingSlash(value) {
@@ -100,6 +103,7 @@ function fetchConfiguredScores(settings) {
 }
 
 function fetchScores(requestId) {
+  diagnostics.replay(function (line) { console.log(line); });
   lastRequestId = requestId || 0;
   var settings = readJson(SETTINGS_KEY, {});
   if (requestInFlight) {
@@ -138,7 +142,7 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function settingsPage(settings) {
+function settingsPage(settings, diagnosticReport) {
   var email = escapeHtml(settings.email || '');
   var hasPassword = Boolean(settings.password);
   return '<!doctype html><html><head><meta charset="utf-8">' +
@@ -149,6 +153,7 @@ function settingsPage(settings) {
     'p{line-height:1.4}.note{font-size:13px;color:#52606b;margin:6px 0 22px}' +
     'label{display:block;font-weight:650;margin:17px 0 6px}input{box-sizing:border-box;width:100%;font-size:16px;padding:12px;border:1px solid #9aa6af;border-radius:6px;background:white}' +
     'button{width:100%;margin-top:24px;padding:13px;border:0;border-radius:6px;background:#0079b8;color:white;font-size:17px;font-weight:700}' +
+    'h2{margin-top:34px}textarea{box-sizing:border-box;width:100%;height:150px;padding:10px;font:11px monospace}' +
     '.cancel{display:block;text-align:center;margin-top:18px;color:#52606b;text-decoration:none}' +
     '.privacy{border-left:4px solid #52606b;background:#e9edf0;padding:10px 12px;font-size:13px}' +
     '</style></head><body><main><h1>CPAP</h1><p>Connect your ResMed myAir account.</p>' +
@@ -158,8 +163,12 @@ function settingsPage(settings) {
     (hasPassword ? 'placeholder="Saved — leave blank to keep"' : 'required') +
     ' autocomplete="current-password">' +
     '<p class="note">The Pebble mobile runtime has no keychain. Your password is stored in this app’s private local storage.</p>' +
-    '<button type="submit">Save and connect</button></form><a class="cancel" href="pebblejs://close">Cancel</a>' +
-    '<script>document.getElementById("form").onsubmit=function(e){e.preventDefault();var v={' +
+    '<button type="submit">Save and connect</button></form>' +
+    '<h2>Diagnostics</h2><p class="note">Saved errors contain no password or ResMed tokens. Copy this report for debugging.</p>' +
+    '<textarea id="diagnostics" readonly>' + escapeHtml(diagnosticReport) + '</textarea>' +
+    '<button type="button" id="copy">Copy diagnostics</button><a class="cancel" href="pebblejs://close">Cancel</a>' +
+    '<script>document.getElementById("copy").onclick=function(){var d=document.getElementById("diagnostics");d.select();document.execCommand("copy");this.textContent="Copied";};' +
+    'document.getElementById("form").onsubmit=function(e){e.preventDefault();var v={' +
     'email:document.getElementById("email").value,password:document.getElementById("password").value};' +
     'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(v));};</script></main></body></html>';
 }
@@ -196,8 +205,14 @@ Pebble.addEventListener('appmessage', function (event) {
   }
 });
 
+Pebble.addEventListener('ready', function () {
+  diagnostics.replay(function (line) { console.log(line); });
+  send({PROTOCOL: 1, COMMAND: COMMAND_PHONE_READY});
+});
+
 Pebble.addEventListener('showConfiguration', function () {
-  var page = settingsPage(readJson(SETTINGS_KEY, {}));
+  diagnostics.replay(function (line) { console.log(line); });
+  var page = settingsPage(readJson(SETTINGS_KEY, {}), diagnostics.report());
   Pebble.openURL('data:text/html;charset=utf-8,' + encodeURIComponent(page));
 });
 
