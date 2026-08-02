@@ -8,11 +8,11 @@ and locks can also be controlled from the watch.
 
 ## Screens
 
-These fake-data screens show several device types supported by the app.
-
-| Lamp | Lock | Motion | Contact | Temperature |
-| :---: | :---: | :---: | :---: | :---: |
-| <img src="docs/screenshots/lamp.png" width="150" alt="Desk lamp control"> | <img src="docs/screenshots/lock.png" width="150" alt="Door lock control"> | <img src="docs/screenshots/motion.png" width="150" alt="Motion sensor status"> | <img src="docs/screenshots/contact.png" width="150" alt="Contact sensor status"> | <img src="docs/screenshots/temperature.png" width="150" alt="Temperature sensor reading"> |
+| Lamp | Lock | Motion |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/lamp.png" width="180" alt="Desk lamp control"> | <img src="docs/screenshots/lock.png" width="180" alt="Door lock control"> | <img src="docs/screenshots/motion.png" width="180" alt="Motion sensor status"> |
+| Contact | Temperature | |
+| <img src="docs/screenshots/contact.png" width="180" alt="Contact sensor status"> | <img src="docs/screenshots/temperature.png" width="180" alt="Temperature sensor reading"> | |
 
 ## Using the watch app
 
