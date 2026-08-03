@@ -10,6 +10,10 @@ const history = readFileSync(new URL('../../../companion_apps/air-quality-androi
 const store = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/ReadingStore.kt', import.meta.url), 'utf8');
 const scanner = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/AranetScanner.kt', import.meta.url), 'utf8');
 const protocol = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/PebbleProtocol.kt', import.meta.url), 'utf8');
+const dailySync = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/AirQualityDailySync.kt', import.meta.url), 'utf8');
+const activity = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/MainActivity.kt', import.meta.url), 'utf8');
+const manifest = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+const settings = readFileSync(new URL('../../../companion_apps/air-quality-android/app/src/main/java/com/skarian/airquality/CompanionSettings.kt', import.meta.url), 'utf8');
 const qa = readFileSync(new URL('../scripts/qa.mjs', import.meta.url), 'utf8');
 
 test('app packages a dedicated one-bit menu icon', () => {
@@ -61,6 +65,23 @@ test('chart refreshes repair missing history from the Aranet device', () => {
   assert.match(history, /historySampleCount/);
   assert.match(history, /requestedStart = totalReadings - sampleCount \+ 1/);
   assert.match(store, /requiredHistoryLookbackSeconds/);
+});
+
+test('Android companion uses on-demand reads plus one notification-free daily sync', () => {
+  assert.match(dailySync, /PeriodicWorkRequestBuilder<AirQualityDailySync>\(24, TimeUnit\.HOURS\)/);
+  assert.match(dailySync, /ExistingPeriodicWorkPolicy\.KEEP/);
+  assert.match(dailySync, /scanner\.readOnce\(address\)/);
+  assert.match(dailySync, /requiredHistoryLookbackSeconds\(address, now, ChartScale\.WEEK\.windowSeconds\)/);
+  assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
+  assert.match(settings, /last_daily_sync_attempt_at/);
+  assert.match(settings, /last_daily_sync_success_at/);
+  assert.match(dailySync, /Daily sync saved a fresh reading/);
+  const dailyLogLines = dailySync.split('\n').filter((line) => line.includes('Log.')).join('\n');
+  assert.doesNotMatch(dailyLogLines, /co2Ppm|sensorAddress|deviceName|reading\./);
+  assert.match(activity, /Last daily sync/);
+  assert.doesNotMatch(scanner, /startMonitoring|SCAN_MODE_LOW_POWER/);
+  assert.doesNotMatch(manifest, /AranetMonitorService|FOREGROUND_SERVICE|POST_NOTIFICATIONS/);
+  assert.doesNotMatch(activity, /startForegroundService|monitoringEnabled/);
 });
 
 test('Aranet4 metrics and services replace all cloud AQI assumptions', () => {

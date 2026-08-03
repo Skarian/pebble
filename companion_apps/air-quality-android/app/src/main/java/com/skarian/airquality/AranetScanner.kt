@@ -27,7 +27,6 @@ class AranetScanner(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter? get() = bluetoothManager?.adapter
-    private var monitorCallback: ScanCallback? = null
 
     fun bluetoothEnabled(): Boolean = adapter?.isEnabled == true
 
@@ -97,31 +96,6 @@ class AranetScanner(private val context: Context) {
         val filter = ScanFilter.Builder().setDeviceAddress(address).build()
         scanner.startScan(listOf(filter), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
         handler.postDelayed({ callback.finish(null) }, timeoutMillis)
-    }
-
-    @SuppressLint("MissingPermission")
-    fun startMonitoring(address: String, reading: (AranetReading) -> Unit) {
-        stopMonitoring()
-        val scanner = adapter?.bluetoothLeScanner ?: return
-        val callback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID) ?: return
-                val name = result.device.name ?: result.scanRecord?.deviceName ?: "Aranet4"
-                AranetProtocol.parseAdvertisement(
-                    bytes, name, result.device.address, Instant.now().epochSecond,
-                )?.let(reading)
-            }
-        }
-        monitorCallback = callback
-        val filter = ScanFilter.Builder().setDeviceAddress(address).build()
-        scanner.startScan(listOf(filter), scanSettings(ScanSettings.SCAN_MODE_LOW_POWER), callback)
-    }
-
-    @SuppressLint("MissingPermission")
-    fun stopMonitoring() {
-        val callback = monitorCallback ?: return
-        monitorCallback = null
-        runCatching { adapter?.bluetoothLeScanner?.stopScan(callback) }
     }
 
     private fun serviceFilters(): List<ScanFilter> = listOf(

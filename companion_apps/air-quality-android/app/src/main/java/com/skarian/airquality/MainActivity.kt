@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -38,6 +37,7 @@ class MainActivity : Activity() {
 
         findViewById<Button>(R.id.chooseSensor).setOnClickListener { chooseSensor() }
         findViewById<Button>(R.id.refreshNow).setOnClickListener { refreshNow() }
+        AirQualityDailySync.schedule(this)
         updateUi()
         maybeImportHistory()
     }
@@ -67,7 +67,6 @@ class MainActivity : Activity() {
                     serviceStatus.text = "Allow Nearby devices to find your Aranet4."
                 }
             }
-            REQUEST_NOTIFICATIONS -> updateUi()
         }
     }
 
@@ -106,11 +105,10 @@ class MainActivity : Activity() {
     private fun selectSensor(device: DiscoveredAranet) {
         settings.sensorAddress = device.address
         settings.sensorName = device.name
-        settings.monitoringEnabled = true
         settings.historyImportedAddress = null
         settings.historyAttemptedAddress = null
         device.reading?.let { reading -> ReadingStore(this).use { it.save(reading) } }
-        startMonitoring()
+        AirQualityDailySync.schedule(this)
         updateUi()
         maybeImportHistory(force = true)
     }
@@ -136,9 +134,7 @@ class MainActivity : Activity() {
             if (reading == null) serviceStatus.text = "Sensor not found. Keep it nearby and try again."
             else {
                 ReadingStore(this).use { it.save(reading) }
-                settings.monitoringEnabled = true
                 if (settings.historyImportedAddress == address) {
-                    startMonitoring()
                     updateUi()
                 } else {
                     settings.historyAttemptedAddress = null
@@ -161,7 +157,6 @@ class MainActivity : Activity() {
 
         historyImporting = true
         settings.historyAttemptedAddress = address
-        stopService(Intent(this, AranetMonitorService::class.java))
         serviceStatus.text = "Importing saved Aranet4 history..."
         AranetHistoryReader(applicationContext).import(
             address = address,
@@ -182,17 +177,9 @@ class MainActivity : Activity() {
                     "Saved history unavailable. New readings will still be saved."
                 },
             )
-            startMonitoring()
             updateUi()
             serviceStatus.text = message
         }
-    }
-
-    private fun startMonitoring() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
-        startForegroundService(Intent(this, AranetMonitorService::class.java))
     }
 
     private fun updateUi() {
@@ -201,7 +188,7 @@ class MainActivity : Activity() {
         if (address.isNullOrBlank()) {
             currentReading.text = "No reading yet"
             detailReading.text = "Choose your Aranet4 to begin."
-            serviceStatus.text = "Monitoring starts after you choose a sensor."
+            serviceStatus.text = "Daily sync starts after you choose a sensor."
             return
         }
         val now = Instant.now().epochSecond
@@ -222,9 +209,12 @@ class MainActivity : Activity() {
                 age(now - value.observedAtEpochSeconds),
             )
         }
-        serviceStatus.text = if (settings.monitoringEnabled) {
-            "Monitoring for Pebble. Open the watch app or press Select to refresh."
-        } else "Monitoring stopped. Choose the sensor again to restart."
+        val lastDailySync = settings.lastDailySyncSuccessAt
+        serviceStatus.text = if (lastDailySync > 0) {
+            "Daily sync enabled · Last daily sync ${age(now - lastDailySync)}."
+        } else {
+            "Daily sync enabled · First automatic sync pending."
+        }
     }
 
     private fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -244,6 +234,5 @@ class MainActivity : Activity() {
     companion object {
         private const val HISTORY_LOG_TAG = "AirQualityHistory"
         private const val REQUEST_BLUETOOTH = 200
-        private const val REQUEST_NOTIFICATIONS = 201
     }
 }

@@ -34,6 +34,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         if (PebbleProtocol.number(data, PebbleProtocol.PROTOCOL) != PebbleProtocol.PROTOCOL_VERSION) {
             return ReceiveResult.Nack
         }
+        AirQualityDailySync.schedule(this)
         val command = PebbleProtocol.number(data, PebbleProtocol.COMMAND)
         if (command != PebbleProtocol.COMMAND_FETCH && command != PebbleProtocol.COMMAND_SCALE) {
             return ReceiveResult.Ack

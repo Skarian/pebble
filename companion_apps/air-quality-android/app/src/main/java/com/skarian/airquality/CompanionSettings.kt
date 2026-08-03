@@ -19,10 +19,6 @@ class CompanionSettings(context: Context) {
             preferences.edit().putString("watch_name", value.trim().uppercase().take(20).ifEmpty { "HOME" }).apply()
         }
 
-    var monitoringEnabled: Boolean
-        get() = preferences.getBoolean("monitoring", false)
-        set(value) { preferences.edit().putBoolean("monitoring", value).apply() }
-
     var historyImportedAddress: String?
         get() = preferences.getString("history_imported_address", null)
         set(value) { preferences.edit().putString("history_imported_address", value).apply() }
@@ -30,4 +26,12 @@ class CompanionSettings(context: Context) {
     var historyAttemptedAddress: String?
         get() = preferences.getString("history_attempted_address", null)
         set(value) { preferences.edit().putString("history_attempted_address", value).apply() }
+
+    var lastDailySyncAttemptAt: Long
+        get() = preferences.getLong("last_daily_sync_attempt_at", 0)
+        set(value) { preferences.edit().putLong("last_daily_sync_attempt_at", value).apply() }
+
+    var lastDailySyncSuccessAt: Long
+        get() = preferences.getLong("last_daily_sync_success_at", 0)
+        set(value) { preferences.edit().putLong("last_daily_sync_success_at", value).apply() }
 }

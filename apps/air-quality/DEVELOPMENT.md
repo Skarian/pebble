@@ -48,10 +48,12 @@ adb install -r ../../companion_apps/air-quality-android/app/build/outputs/apk/de
 Then:
 
 1. Open **AirQuality Companion** on the phone.
-2. Allow **Nearby devices** and notifications.
+2. Allow **Nearby devices**.
 3. Tap **Choose sensor** and select your Aranet4.
 4. Set the short name shown on the watch, such as `HOME` or `OFFICE`.
-5. Keep the monitoring notification running.
+5. Android schedules one best-effort sync per day without a persistent
+   notification. Open the watch app whenever you want a fresh reading now.
+   The Android screen reports the age of the last successful automatic sync.
 6. Install `build/air-quality.pbw`, then open **AirQuality** on Pebble.
 
 If the sensor appears without a reading, open Aranet Home and enable
@@ -60,12 +62,13 @@ If the sensor appears without a reading, open Aranet Home and enable
 ## How history works
 
 After you choose a sensor, the companion imports up to eight days of readings
-already stored in the Aranet4. It then saves each new reading it sees. The
-database retains eight days. Before returning a chart, the companion checks the
-selected time window for gaps longer than 15 minutes. When it finds one, it
-requests only the missing tail of the Aranet4's on-device history and merges it
-into the database by timestamp. Normal refreshes with continuous data do not
-open a history connection.
+already stored in the Aranet4. The database retains eight days. Opening the
+watch app, pressing Select on its current screen, or tapping **Refresh now** on
+Android saves a fresh reading. A battery-optimized WorkManager job does the same
+about once per day. Before returning a chart, the companion checks the selected
+time window for gaps longer than 15 minutes. When it finds one, it requests only
+the missing tail of the Aranet4's on-device history and merges it into the
+database by timestamp. The daily job also repairs gaps across the one-week chart.
 
 All three chart scales use the same rolling time-series view. The graph has 56
 time columns, which is the useful horizontal resolution at Pebble size. Every
@@ -113,7 +116,7 @@ blocking full-screen sync and error states, bounded list, last-good cache,
 request IDs, stale-response rejection, and numbered QA board follow the
 working `apps/cpap/` app. The updated line is promoted to a more readable system
 font after native-device review. The Aranet adaptation removes cloud setup,
-AQI, polling modes, technical status prose, and extra metadata. There is one
+AQI, continuous monitoring, technical status prose, and extra metadata. There is one
 primary value or action per screen.
 
 The device's own CO2 state drives the face instead of hard-coded thresholds,
@@ -125,7 +128,7 @@ Good below 1000 ppm, Average from 1000 through 1400 ppm, and Unhealthy above
 
 - `src/c/main.c`: production Pebble UI, persistent cache, request ordering.
 - `../../companion_apps/air-quality-android/`: direct Aranet4 BLE reader, local
-  history, and PebbleKit transport.
+  history, daily WorkManager sync, and PebbleKit transport.
 - `src/common/air_quality_model.js`: repository QA state model only.
 - `scripts/qa.mjs`: deterministic screenshots and contact sheet.
 

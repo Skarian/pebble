@@ -33,7 +33,10 @@ The current-reading screen shows how old that reading is.
 
 The companion talks directly to the sensor over Bluetooth. It does not need an
 Aranet cloud account, API key, base station, or location permission on modern
-Android. Readings stay on the phone and watch.
+Android. Opening the watch app or pressing Select requests a fresh reading and
+repairs missing chart history. Android also performs one battery-conscious sync
+about once per day; there is no continuous scan or persistent notification.
+Readings stay on the phone and watch.
 
 ## Build and install
 
@@ -52,8 +55,8 @@ Install the phone companion, then install `build/air-quality.pbw` on the watch:
 adb install -r ../../companion_apps/air-quality-android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open AirQuality Companion, allow Nearby devices and notifications, choose the
-sensor, and pick the short name shown on the watch.
+Open AirQuality Companion, allow Nearby devices, choose the sensor, and pick the
+short name shown on the watch.
 
 AirQuality is for awareness only and does not give medical advice.
 
