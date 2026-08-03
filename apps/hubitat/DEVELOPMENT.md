@@ -17,11 +17,11 @@ shows battery, temperature, or humidity only when useful. Devices without a
 battery reading omit that row so the remaining content stays centered. There
 are no separate Detail or Action pages.
 
-The watch saves the last successful update. Reopening uses that saved data
-without contacting Hubitat. If no saved data exists, the app refreshes once.
-During a refresh it shows `SYNCING...`; errors never replace the saved data.
-There is no scheduled refresh. `UPDATED NOW` appears only on Overview after
-data is received; press **Select** there whenever you want a new reading.
+The watch saves the last successful update and refreshes once whenever the app
+opens. During a refresh it shows `SYNCING...`; a failure shows the normal
+error/retry screen without replacing the saved data. There is no scheduled
+refresh. `UPDATED NOW` appears only on Overview after data is received; press
+**Select** there whenever you want another reading.
 
 ## Configure Maker API
 

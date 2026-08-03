@@ -17,12 +17,14 @@ and locks can also be controlled from the watch.
 ## Using the watch app
 
 - Press Up or Down to move between the overview and individual devices.
+- Opening the app refreshes device states automatically.
 - Press Select on the overview to refresh.
 - Press Select on a switch to run the action shown at the bottom of the screen.
 - Locks require a second Select press before the command is sent.
 
-The app keeps the last successful update on the watch. A failed refresh leaves
-that saved data in place.
+The app keeps the last successful update on the watch. Each launch shows the
+normal syncing screen while it requests current device states. A failed refresh
+shows the normal error/retry screen and leaves the saved data in place.
 
 ## Connect Hubitat
 

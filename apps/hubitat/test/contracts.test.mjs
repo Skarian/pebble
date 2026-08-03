@@ -25,7 +25,8 @@ test('watch keeps a bounded persistent last-good virtual list with stale respons
   assert.match(watch, /return 1 \+ s_header\.count/);
   assert.doesNotMatch(watch, /PAGE_DETAIL|PAGE_CONTROL|control_page_for|status_page_for/);
   assert.match(watch, /RESPONSE_TIMEOUT_MS 30000/);
-  assert.match(watch, /if \(!s_has_cache\) request_refresh\(\)/);
+  assert.match(watch, /window_stack_push\(s_window, true\);\n  request_refresh\(\);/);
+  assert.doesNotMatch(watch, /if \(!s_has_cache\) request_refresh\(\)/);
   assert.match(watch, /if \(s_page_index == 0\) \{ request_refresh\(\); return; \}/);
   assert.doesNotMatch(watch, /tick_timer_service_subscribe|STALE/);
   assert.match(watch, /set_text\("HOME", "DEVICES", primary, secondary, meta, "UPDATED NOW"\)/);

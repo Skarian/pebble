@@ -553,7 +553,7 @@ static void init(void) {
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(1024, 256);
   window_stack_push(s_window, true);
-  if (!s_has_cache) request_refresh();
+  request_refresh();
 }
 
 static void deinit(void) {
