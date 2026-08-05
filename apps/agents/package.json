@@ -1,0 +1,38 @@
+{
+  "name": "agents",
+  "author": "Neil Skaria",
+  "version": "0.1.0",
+  "keywords": ["pebble-app", "codex", "agents"],
+  "private": true,
+  "dependencies": {},
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "qa": "node scripts/qa-screenshots.mjs",
+    "qa:screenshots": "node scripts/qa-screenshots.mjs"
+  },
+  "pebble": {
+    "displayName": "Agents",
+    "uuid": "bba3f38f-53e5-458b-9d5f-0bcdb68ffd47",
+    "sdkVersion": "3",
+    "targetPlatforms": ["emery"],
+    "watchapp": {"watchface": false},
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/Skarian/pebble",
+        "apps": [{"package": "com.skarian.agentscompanion"}]
+      }
+    },
+    "messageKeys": {
+      "KIND": 0,
+      "REQUEST_ID": 1,
+      "AGENT_ID": 2,
+      "TEXT": 3,
+      "MODE": 4,
+      "AGENT_COUNT": 5,
+      "ERROR_CODE": 6,
+      "CHUNK_INDEX": 7,
+      "CHUNK_COUNT": 8
+    },
+    "resources": {"media": []}
+  }
+}

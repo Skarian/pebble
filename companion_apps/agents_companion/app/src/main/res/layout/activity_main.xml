@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F7F7F5"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Agents"
+            android:textColor="#111111"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Pebble to Codex bridge"
+            android:textColor="#666666"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/overallStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="#111111"
+            android:padding="16dp"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <TextView
+            style="@style/SectionTitle"
+            android:text="Termux and router" />
+
+        <TextView
+            android:id="@+id/termuxStatus"
+            style="@style/StatusCard" />
+
+        <Button
+            android:id="@+id/grantTermuxButton"
+            style="@style/ActionButton"
+            android:text="Grant Termux access" />
+
+        <Button
+            android:id="@+id/grantNotificationsButton"
+            style="@style/ActionButton"
+            android:text="Enable result notifications" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/refreshAgentsButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Refresh agents" />
+
+            <Button
+                android:id="@+id/runDoctorButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="Run doctor" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SectionTitle"
+            android:text="Available agents" />
+
+        <TextView
+            android:id="@+id/agentsStatus"
+            style="@style/StatusCard" />
+
+        <TextView
+            style="@style/SectionTitle"
+            android:text="Pebble connection" />
+
+        <TextView
+            android:id="@+id/pebbleStatus"
+            style="@style/StatusCard" />
+
+        <TextView
+            style="@style/SectionTitle"
+            android:text="Latest activity" />
+
+        <TextView
+            android:id="@+id/latestStatus"
+            style="@style/StatusCard"
+            android:minHeight="80dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="12dp"
+            android:text="Agent definitions stay in ~/.codex-router.toml. This app wakes for watch messages, runs the installed codex-router command in your Termux login environment, then returns progress and results."
+            android:textColor="#666666"
+            android:textSize="14sp" />
+    </LinearLayout>
+</ScrollView>

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -33,6 +34,7 @@ from libpebble2.services.install import AppInstaller
 from libpebble2.services.appmessage import (
     AppMessageService, CString, Int8, Int16, Int32, Uint8, Uint16, Uint32
 )
+from libpebble2.services.voice import VoiceService, SetupResult, TranscriptionResult
 from pebble_tool.commands.base import PebbleTransportPhone, PebbleTransportQemu
 from pebble_tool.commands.emucontrol import send_data_to_qemu
 from pebble_tool.sdk import sdk_manager
@@ -62,6 +64,95 @@ APP_MESSAGE_TYPES = {
 }
 DISPLAY_SAMPLE_INTERVAL = 0.1
 DISPLAY_QUIET_PERIOD = 0.4
+
+
+class VoiceHarness:
+    def __init__(self, connection):
+        self.service = VoiceService(connection)
+        self.transcription = ""
+        self.result = TranscriptionResult.Success
+        self.app_uuid = None
+        self.service.register_handler("session_setup", self._session_setup)
+        self.service.register_handler("audio_stop", self._audio_stop)
+
+    def configure(self, config):
+        config = config or {}
+        self.transcription = config.get("transcription", "")
+        error = config.get("error")
+        self.result = {
+            "connectivity": TranscriptionResult.FailNoInternet,
+            "no-speech": TranscriptionResult.FailSpeechNotRecognized,
+            "recognizer": TranscriptionResult.FailRecognizerError,
+        }.get(error, TranscriptionResult.Success)
+
+    def _session_setup(self, app_uuid, encoder_info):
+        self.app_uuid = app_uuid
+        self.service.send_session_setup_result(SetupResult.Success, app_uuid)
+
+    def _audio_stop(self):
+        words = [part.strip() for part in re.split(r"(\W)", self.transcription) if part.strip()]
+        words = [part if re.match(r"\w", part) else "\b" + part for part in words]
+        self.service.send_stop_audio()
+        self.service.send_dictation_result(
+            result=self.result,
+            sentences=[words] if self.result == TranscriptionResult.Success else None,
+            app_uuid=self.app_uuid,
+        )
+
+
+class BridgeHarness:
+    def __init__(self, appmessage, target):
+        self.appmessage = appmessage
+        self.target = target
+        self.config = {}
+        self.last_request_id = ""
+        appmessage.register_handler("appmessage", self._receive)
+
+    def configure(self, config):
+        self.config = config or {}
+        events = self.config.get("pushEvents", [])
+        if events and self.last_request_id:
+            threading.Thread(
+                target=self._send_events,
+                args=(self.last_request_id, events),
+                daemon=True,
+            ).start()
+
+    def _receive(self, transaction_id, app_uuid, data):
+        if app_uuid != self.target:
+            return
+        threading.Thread(target=self._respond, args=(data,), daemon=True).start()
+
+    def _respond(self, data):
+        kind = data.get(0)
+        if kind == 1:
+            agents = self.config.get("agents", [])
+            message = {0: {"type": "uint8", "value": 10},
+                       5: {"type": "uint8", "value": len(agents)}}
+            for index, agent in enumerate(agents):
+                message[str(100 + index * 2)] = {"type": "cstring", "value": agent["id"]}
+                message[str(101 + index * 2)] = {"type": "cstring", "value": agent["label"]}
+            send_app_message(self.appmessage, self.target, message)
+        elif kind == 2:
+            request_id = data.get(1, "")
+            self.last_request_id = request_id
+            events = self.config.get("events", [{"kind": 11}])
+            self._send_events(request_id, events)
+
+    def _send_events(self, request_id, events):
+        for event in events:
+            time.sleep(event.get("delayMs", 0) / 1000)
+            message = {
+                "0": {"type": "uint8", "value": event["kind"]},
+                "1": {"type": "cstring", "value": request_id},
+                "7": {"type": "uint16", "value": event.get("chunkIndex", 0)},
+                "8": {"type": "uint16", "value": event.get("chunkCount", 1)},
+            }
+            if "text" in event:
+                message["3"] = {"type": "cstring", "value": event["text"]}
+            if "code" in event:
+                message["6"] = {"type": "cstring", "value": event["code"]}
+            send_app_message(self.appmessage, self.target, message)
 
 
 def main():
@@ -166,13 +257,16 @@ def main():
             elif isinstance(state, AppRunStateStop) and state.uuid == running:
                 running = None
     status("app is in foreground")
-    wait_for_stable_display(transport, args.timeout)
-    status("initial display is stable")
+    if not args.serve:
+        wait_for_stable_display(transport, args.timeout)
+        status("initial display is stable")
 
     if args.serve:
+        voice = VoiceHarness(connection)
+        bridge = BridgeHarness(session_appmessage, expected)
         try:
             serve(connection, transport, expected, args.timeout, session_appmessage,
-                  launcher.qemu_pid if launcher else None)
+                  launcher.qemu_pid if launcher else None, voice, bridge)
         finally:
             close_transport(transport)
             if launcher and launcher.qemu_pid:
@@ -206,32 +300,45 @@ def main():
 
 
 def capture(connection, transport, expected, timeout, buttons, output,
-            appmessage=None, message=None):
-    for button in buttons:
-        status("clicking {}".format(button))
+            appmessage=None, message=None, skip_stable=False, wait_ms=0):
+    for button_spec in buttons:
+        if isinstance(button_spec, str):
+            button = button_spec
+            duration_ms = 100
+        else:
+            button = button_spec.get("button")
+            duration_ms = int(button_spec.get("durationMs", 100))
+        if button not in BUTTONS or not 1 <= duration_ms <= 10000:
+            raise RuntimeError("Capture session received an unsupported button action")
+        status("pressing {} for {}ms".format(button, duration_ms))
         monitor_port = getattr(transport, "qemu_monitor_port", None)
-        if monitor_port and isinstance(transport, WebsocketTransport):
+        if monitor_port and isinstance(transport, WebsocketTransport) and duration_ms == 100:
             qemu_monitor(monitor_port, "sendkey {}".format(MONITOR_KEYS[button]),
                          time.monotonic() + timeout)
         else:
             send_data_to_qemu(transport, QemuButton(state=BUTTONS[button]))
-            time.sleep(0.1)
+            time.sleep(duration_ms / 1000)
             send_data_to_qemu(transport, QemuButton(state=0))
         verify_foreground(connection, expected, timeout)
 
     if message is not None:
         send_app_message(appmessage, expected, message)
 
+    if wait_ms:
+        time.sleep(wait_ms / 1000)
+
     running = verify_foreground(connection, expected, timeout)
-    wait_for_stable_display(transport, timeout)
-    status("final display is stable")
+    if not skip_stable:
+        wait_for_stable_display(transport, timeout)
+        status("final display is stable")
     status("capturing raw screenshot")
     image = grab_screenshot(connection, timeout)
     png.from_array(image, mode="RGB;8").save(output)
     return running
 
 
-def serve(connection, transport, expected, timeout, appmessage, qemu_pid=None):
+def serve(connection, transport, expected, timeout, appmessage, qemu_pid=None,
+          voice=None, bridge=None):
     print(json.dumps({
         "event": "ready", "uuid": str(expected), "qemuPid": qemu_pid
     }), flush=True)
@@ -246,10 +353,13 @@ def serve(connection, transport, expected, timeout, appmessage, qemu_pid=None):
             buttons = request.get("buttons", [])
             if not output:
                 raise RuntimeError("Capture session output is required")
-            if any(button not in BUTTONS for button in buttons):
-                raise RuntimeError("Capture session received an unsupported button")
+            if voice:
+                voice.configure(request.get("voice"))
+            if bridge:
+                bridge.configure(request.get("bridge"))
             running = capture(connection, transport, expected, timeout, buttons, output,
-                              appmessage, request.get("message"))
+                              appmessage, request.get("message"),
+                              request.get("skipStable", False), request.get("waitMs", 0))
             print(json.dumps({
                 "event": "captured", "output": output, "uuid": str(running)
             }), flush=True)
