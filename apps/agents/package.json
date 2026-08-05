@@ -31,7 +31,10 @@
       "AGENT_COUNT": 5,
       "ERROR_CODE": 6,
       "CHUNK_INDEX": 7,
-      "CHUNK_COUNT": 8
+      "CHUNK_COUNT": 8,
+      "PROTOCOL": 9,
+      "EVENT_SEQUENCE": 10,
+      "FLAGS": 11
     },
     "resources": {"media": []}
   }

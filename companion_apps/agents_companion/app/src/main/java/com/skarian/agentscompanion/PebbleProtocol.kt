@@ -2,28 +2,22 @@ package com.skarian.agentscompanion
 
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 
-enum class WatchCommand(val wireValue: UByte) {
-    REFRESH_AGENTS(1u),
-    SEND(2u),
-}
-
+enum class WatchCommand(val wireValue: UByte) { REFRESH_AGENTS(1u), SEND(2u), RECONCILE(3u) }
 enum class PhoneEvent(val wireValue: UByte) {
-    AGENTS(10u),
-    ACCEPTED(11u),
-    COMMENTARY(12u),
-    COMPLETED(13u),
-    FAILED(14u),
+    AGENTS(10u), ACCEPTED(11u), COMMENTARY(12u), COMPLETED(13u), FAILED(14u),
+    STATUS_UNKNOWN(15u), AGENTS_FAILED(16u),
 }
 
 data class WatchRequest(
-    val command: WatchCommand,
-    val agentId: String? = null,
-    val text: String? = null,
-    val requestId: String? = null,
-    val mode: ExecutionMode = ExecutionMode.STREAM,
+    val command: WatchCommand, val agentId: String? = null, val text: String? = null,
+    val requestId: String? = null, val mode: ExecutionMode = ExecutionMode.STREAM,
+    val lastSequence: Int = 0,
 )
 
+data class ProjectedText(val text: String, val truncated: Boolean)
+
 object PebbleProtocol {
+    const val VERSION = 1
     const val KEY_KIND = 0u
     const val KEY_REQUEST_ID = 1u
     const val KEY_AGENT_ID = 2u
@@ -33,92 +27,97 @@ object PebbleProtocol {
     const val KEY_ERROR_CODE = 6u
     const val KEY_CHUNK_INDEX = 7u
     const val KEY_CHUNK_COUNT = 8u
+    const val KEY_PROTOCOL = 9u
+    const val KEY_EVENT_SEQUENCE = 10u
+    const val KEY_FLAGS = 11u
     const val KEY_AGENT_BASE = 100u
+    const val FLAG_TRUNCATED = 0x01
+    const val FLAG_AMBIGUOUS = 0x02
+    const val FLAG_CACHED = 0x04
     const val MAX_AGENTS = 16
-    const val MAX_TEXT_CHARS = 4096
+    const val MAX_AGENT_ID_BYTES = 32
+    const val MAX_AGENT_LABEL_BYTES = 64
+    const val MAX_TRANSCRIPT_BYTES = 767
+    const val CHUNK_BYTES = 700
+    const val MAX_CHUNKS = 8
+    const val MAX_WATCH_TEXT_BYTES = CHUNK_BYTES * MAX_CHUNKS
+    private const val TRUNCATION_SUFFIX = "\n\n[TRUNCATED ON WATCH]"
 
     fun parseWatchRequest(data: Map<UInt, PebbleDictionaryItem>): WatchRequest {
-        val kind = number(data[KEY_KIND])
-        val command = WatchCommand.entries.firstOrNull { it.wireValue.toLong() == kind }
+        require(number(data[KEY_PROTOCOL]) == VERSION.toLong()) { "Protocol update required." }
+        val command = WatchCommand.entries.firstOrNull { it.wireValue.toLong() == number(data[KEY_KIND]) }
             ?: throw IllegalArgumentException("Unknown watch command.")
-        if (command == WatchCommand.REFRESH_AGENTS) return WatchRequest(command)
-
+        if (command == WatchCommand.REFRESH_AGENTS) {
+            return WatchRequest(command, requestId = optionalText(data[KEY_REQUEST_ID])?.also(::validateRequestId))
+        }
+        val requestId = text(data[KEY_REQUEST_ID]).also(::validateRequestId)
+        if (command == WatchCommand.RECONCILE) {
+            val sequence = data[KEY_EVENT_SEQUENCE]?.let(::number)?.toInt() ?: 0
+            require(sequence in 0..65535) { "Invalid event sequence." }
+            return WatchRequest(command, requestId = requestId, lastSequence = sequence)
+        }
         val agentId = text(data[KEY_AGENT_ID])
         val transcript = text(data[KEY_TEXT])
-        require(agentId.matches(Regex("[a-z][a-z0-9-]*"))) { "Invalid agent id." }
-        require(transcript.isNotBlank()) { "Transcript is empty." }
-        require(transcript.length <= MAX_TEXT_CHARS) { "Transcript is too long." }
-        val requestId = text(data[KEY_REQUEST_ID])
-        require(requestId.matches(Regex("[A-Za-z0-9._:-]{1,64}"))) { "Invalid request id." }
-        val mode = when (data[KEY_MODE]?.let(::number)?.toInt()) {
-            0 -> ExecutionMode.FINAL_JSON
-            else -> ExecutionMode.STREAM
-        }
+        require(agentId.matches(Regex("[a-z][a-z0-9-]*")) && utf8(agentId) <= MAX_AGENT_ID_BYTES) { "Invalid agent id." }
+        require(transcript.isNotBlank() && utf8(transcript) <= MAX_TRANSCRIPT_BYTES) { "Invalid transcript." }
+        val mode = if (data[KEY_MODE]?.let(::number)?.toInt() == 0) ExecutionMode.FINAL_JSON else ExecutionMode.STREAM
         return WatchRequest(command, agentId, transcript, requestId, mode)
     }
 
-    fun agents(agents: List<AgentSummary>): Map<UInt, PebbleDictionaryItem> = buildMap {
-        val bounded = agents.take(MAX_AGENTS)
-        put(KEY_KIND, PebbleDictionaryItem.UInt8(PhoneEvent.AGENTS.wireValue))
-        put(KEY_AGENT_COUNT, PebbleDictionaryItem.UInt8(bounded.size.toUByte()))
-        bounded.forEachIndexed { index, agent ->
-            val base = KEY_AGENT_BASE + (index * 2).toUInt()
-            put(base, PebbleDictionaryItem.Text(agent.id))
-            put(base + 1u, PebbleDictionaryItem.Text(agent.label))
+    fun agents(agents: List<AgentSummary>, requestId: String? = null, cached: Boolean = false): Map<UInt, PebbleDictionaryItem> {
+        require(agents.size <= MAX_AGENTS) { "At most $MAX_AGENTS agents can be shown on the watch." }
+        require(agents.map { it.id }.distinct().size == agents.size) { "Agent ids must be unique." }
+        agents.forEach {
+            require(it.id.matches(Regex("[a-z][a-z0-9-]*")) && utf8(it.id) <= MAX_AGENT_ID_BYTES) { "Agent id is not watch-compatible: ${it.id}" }
+            require(it.label.isNotBlank() && utf8(it.label) <= MAX_AGENT_LABEL_BYTES) { "Agent label is not watch-compatible: ${it.id}" }
+        }
+        return buildMap {
+            put(KEY_PROTOCOL, PebbleDictionaryItem.UInt8(VERSION.toUByte()))
+            put(KEY_KIND, PebbleDictionaryItem.UInt8(PhoneEvent.AGENTS.wireValue))
+            put(KEY_AGENT_COUNT, PebbleDictionaryItem.UInt8(agents.size.toUByte()))
+            requestId?.let { put(KEY_REQUEST_ID, PebbleDictionaryItem.Text(it)) }
+            put(KEY_FLAGS, PebbleDictionaryItem.UInt8((if (cached) FLAG_CACHED else 0).toUByte()))
+            agents.forEachIndexed { index, agent ->
+                val base = KEY_AGENT_BASE + (index * 2).toUInt()
+                put(base, PebbleDictionaryItem.Text(agent.id)); put(base + 1u, PebbleDictionaryItem.Text(agent.label))
+            }
         }
     }
 
-    fun event(
-        kind: PhoneEvent,
-        requestId: String,
-        text: String = "",
-        code: String? = null,
-        chunkIndex: Int = 0,
-        chunkCount: Int = 1,
-    ): Map<UInt, PebbleDictionaryItem> = buildMap {
-        put(KEY_KIND, PebbleDictionaryItem.UInt8(kind.wireValue))
-        put(KEY_REQUEST_ID, PebbleDictionaryItem.Text(requestId))
+    fun event(kind: PhoneEvent, requestId: String, text: String = "", code: String? = null,
+              chunkIndex: Int = 0, chunkCount: Int = 1, sequence: Int = 0, flags: Int = 0) = buildMap<UInt, PebbleDictionaryItem> {
+        put(KEY_PROTOCOL, PebbleDictionaryItem.UInt8(VERSION.toUByte()))
+        put(KEY_KIND, PebbleDictionaryItem.UInt8(kind.wireValue)); put(KEY_REQUEST_ID, PebbleDictionaryItem.Text(requestId))
         if (text.isNotBlank()) put(KEY_TEXT, PebbleDictionaryItem.Text(text))
         if (!code.isNullOrBlank()) put(KEY_ERROR_CODE, PebbleDictionaryItem.Text(code))
         put(KEY_CHUNK_INDEX, PebbleDictionaryItem.UInt16(chunkIndex.toUShort()))
         put(KEY_CHUNK_COUNT, PebbleDictionaryItem.UInt16(chunkCount.toUShort()))
+        put(KEY_EVENT_SEQUENCE, PebbleDictionaryItem.UInt16(sequence.toUShort()))
+        put(KEY_FLAGS, PebbleDictionaryItem.UInt8(flags.toUByte()))
     }
 
-    fun chunkText(text: String, maxBytes: Int = 700): List<String> {
-        require(maxBytes > 0)
-        if (text.isEmpty()) return listOf("")
-        val chunks = mutableListOf<String>()
-        var start = 0
-        var index = 0
-        var bytes = 0
-        while (index < text.length) {
-            val codePoint = text.codePointAt(index)
-            val chars = Character.charCount(codePoint)
-            val encoded = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8).size
-            if (bytes > 0 && bytes + encoded > maxBytes) {
-                chunks += text.substring(start, index)
-                start = index
-                bytes = 0
-            }
-            bytes += encoded
-            index += chars
-        }
-        chunks += text.substring(start)
+    fun projectText(text: String): ProjectedText {
+        if (utf8(text) <= MAX_WATCH_TEXT_BYTES) return ProjectedText(text, false)
+        val suffixBytes = utf8(TRUNCATION_SUFFIX)
+        return ProjectedText(takeUtf8(text, MAX_WATCH_TEXT_BYTES - suffixBytes) + TRUNCATION_SUFFIX, true)
+    }
+
+    fun chunkText(text: String, maxBytes: Int = CHUNK_BYTES): List<String> {
+        require(maxBytes > 0); if (text.isEmpty()) return listOf("")
+        val chunks = mutableListOf<String>(); var remaining = text
+        while (remaining.isNotEmpty()) { val part = takeUtf8(remaining, maxBytes); require(part.isNotEmpty()); chunks += part; remaining = remaining.substring(part.length) }
         return chunks
     }
 
-    private fun text(item: PebbleDictionaryItem?): String =
-        (item as? PebbleDictionaryItem.Text)?.value
-            ?: throw IllegalArgumentException("Required text field is missing.")
-
-    // PebbleKit2 normalizes all incoming watch integers to 32-bit values.
+    private fun takeUtf8(value: String, limit: Int): String { var i = 0; var bytes = 0; while (i < value.length) { val cp = value.codePointAt(i); val chars = Character.charCount(cp); val n = String(Character.toChars(cp)).toByteArray().size; if (bytes + n > limit) break; bytes += n; i += chars }; return value.substring(0, i) }
+    private fun utf8(value: String) = value.toByteArray(Charsets.UTF_8).size
+    private fun validateRequestId(value: String) { require(value.matches(Regex("[A-Za-z0-9._:-]{1,64}"))) { "Invalid request id." } }
+    private fun optionalText(item: PebbleDictionaryItem?) = (item as? PebbleDictionaryItem.Text)?.value
+    private fun text(item: PebbleDictionaryItem?) = optionalText(item) ?: throw IllegalArgumentException("Required text field is missing.")
     private fun number(item: PebbleDictionaryItem?): Long = when (item) {
-        is PebbleDictionaryItem.UInt32 -> item.value.toLong()
-        is PebbleDictionaryItem.Int32 -> item.value.toLong()
-        is PebbleDictionaryItem.UInt16 -> item.value.toLong()
-        is PebbleDictionaryItem.Int16 -> item.value.toLong()
-        is PebbleDictionaryItem.UInt8 -> item.value.toLong()
-        is PebbleDictionaryItem.Int8 -> item.value.toLong()
+        is PebbleDictionaryItem.UInt32 -> item.value.toLong(); is PebbleDictionaryItem.Int32 -> item.value.toLong()
+        is PebbleDictionaryItem.UInt16 -> item.value.toLong(); is PebbleDictionaryItem.Int16 -> item.value.toLong()
+        is PebbleDictionaryItem.UInt8 -> item.value.toLong(); is PebbleDictionaryItem.Int8 -> item.value.toLong()
         else -> throw IllegalArgumentException("Required integer field is missing.")
     }
 }

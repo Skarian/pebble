@@ -18,6 +18,13 @@ native dictation, streaming display, and short turn history.
 - Back leaves history, returns from a running turn without cancelling it, or
   closes a completed turn.
 
+The watch persists its active request, agent, phase, event sequence, and
+request counter. Relaunching reconciles the stored request with the companion;
+it never resends the transcript. A 30-second admission timer and 60-second
+stream watchdog recover through the same reconcile command. Responses use at
+most eight ordered chunks and show a visible truncation marker when the full
+phone-side result exceeds the watch projection.
+
 The watchapp UUID is `bba3f38f-53e5-458b-9d5f-0bcdb68ffd47`. Its only Android
 companion is `com.skarian.agentscompanion` in
 `companion_apps/agents_companion`.

@@ -3,17 +3,18 @@ package com.skarian.agentscompanion
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import com.termux.shared.termux.TermuxConstants
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 
 class TermuxCommandRunner(private val context: Context) {
-    fun refreshAgents(): String = execute(
+    fun refreshAgents(requestId: String = UUID.randomUUID().toString()): String = execute(
         kind = KIND_AGENTS,
         arguments = arrayOf("agents", "list", "--json"),
         stdin = null,
         mode = null,
+        requestId = requestId,
     )
 
     fun doctor(): String = execute(
@@ -69,6 +70,7 @@ class TermuxCommandRunner(private val context: Context) {
         streamCallback: StreamCallback? = null,
     ): String {
         val callback = Intent(context, TermuxResultReceiver::class.java)
+            .setData(Uri.parse(callbackIdentity(kind, requestId)))
             .putExtra(EXTRA_REQUEST_ID, requestId)
             .putExtra(EXTRA_KIND, kind)
             .putExtra(EXTRA_MODE, mode?.name)
@@ -76,7 +78,7 @@ class TermuxCommandRunner(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         val pendingIntent = PendingIntent.getBroadcast(
             context,
-            nextRequestCode.incrementAndGet(),
+            requestId.hashCode(),
             callback,
             flags,
         )
@@ -115,7 +117,7 @@ class TermuxCommandRunner(private val context: Context) {
                 putExtra(TermuxConstants.TERMUX_APP.RUN_COMMAND_SERVICE.EXTRA_STDIN, it)
             }
         }
-        context.startService(command)
+        requireNotNull(context.startService(command)) { "Termux did not accept the command." }
         return requestId
     }
 
@@ -132,20 +134,28 @@ class TermuxCommandRunner(private val context: Context) {
         private const val SHELL_NAME = "agents-companion"
         private const val ROUTER_COMMAND = "exec codex-router \"\$@\""
         private const val STREAM_COMMAND = "exec node -e \"\$1\" \"\${@:2}\""
+        internal fun callbackIdentity(kind: String, requestId: String) = "agents://termux-result/$kind/$requestId"
         private val NODE_STREAM_BRIDGE = """
             const net = require("net");
+            const fs = require("fs");
             const { spawn } = require("child_process");
             const [portText, requestId, token, ...routerArgs] = process.argv.slice(1);
             const child = spawn("codex-router", routerArgs, { stdio: ["inherit", "pipe", "inherit"] });
             let buffer = "";
             let pending = Promise.resolve();
             let callbackFailure = null;
+            let sequence = 0;
+            let terminal = "";
             function forward(line) {
               if (!line) return;
-              process.stdout.write(line + "\n");
+              sequence += 1;
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.type === "completed" || parsed.type === "failed") terminal = line;
+              } catch (_) {}
               pending = pending.then(() => new Promise((resolve, reject) => {
                 const socket = net.createConnection({ host: "127.0.0.1", port: Number(portText) }, () => {
-                  socket.end(JSON.stringify({ requestId, token, line }) + "\n");
+                  socket.end(JSON.stringify({ requestId, token, sequence, line }) + "\n");
                 });
                 socket.once("close", resolve);
                 socket.once("error", reject);
@@ -161,6 +171,7 @@ class TermuxCommandRunner(private val context: Context) {
             child.stdout.on("end", () => { if (buffer) forward(buffer); });
             child.once("error", error => { console.error(error.message); process.exit(127); });
             child.once("close", code => pending.then(() => {
+              if (terminal) fs.writeSync(1, terminal + "\n");
               if (callbackFailure) {
                 console.error("stream callback failed: " + callbackFailure.message);
                 process.exit(91);
@@ -168,7 +179,6 @@ class TermuxCommandRunner(private val context: Context) {
               process.exit(code == null ? 1 : code);
             }));
         """.trimIndent()
-        private val nextRequestCode = AtomicInteger(1000)
     }
 
     private data class StreamCallback(val port: Int, val token: String)

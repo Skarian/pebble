@@ -111,6 +111,8 @@ function startSession(pbw) {
 function agentsMessage(agents = AGENTS) {
   const message = {
     0: {type: 'uint8', value: 10},
+    9: {type: 'uint8', value: 1},
+    11: {type: 'uint8', value: 0},
     5: {type: 'uint8', value: agents.length},
   };
   agents.forEach((agent, index) => {
@@ -124,6 +126,7 @@ function errorMessage(error) {
   return {
     0: {type: 'uint8', value: 240},
     6: {type: 'uint8', value: error},
+    9: {type: 'uint8', value: 1},
   };
 }
 
@@ -211,7 +214,9 @@ async function main() {
     }
     await capture('BACK TO FINAL RESPONSE', {buttons: ['back']});
     await capture('AGENT READY AFTER TURN', {buttons: ['back']});
-    await capture('NO AGENTS', {message: agentsMessage([])});
+    await capture('NO AGENTS', {
+      buttons: ['up', 'select'], bridge: {agents: []}, waitMs: 250,
+    });
     await capture('PHONE OFFLINE', {message: errorMessage(2)});
     await capture('REFRESH FAILED - CACHE KEPT', {message: errorMessage(3)});
     await capture('DICTATION FAILED', {message: errorMessage(4)});

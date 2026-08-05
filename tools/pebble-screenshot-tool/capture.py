@@ -106,6 +106,7 @@ class BridgeHarness:
         self.target = target
         self.config = {}
         self.last_request_id = ""
+        self.event_sequence = 0
         appmessage.register_handler("appmessage", self._receive)
 
     def configure(self, config):
@@ -126,9 +127,14 @@ class BridgeHarness:
     def _respond(self, data):
         kind = data.get(0)
         if kind == 1:
-            agents = self.config.get("agents", [])
+            if "agents" not in self.config:
+                return
+            agents = self.config["agents"]
             message = {0: {"type": "uint8", "value": 10},
+                       9: {"type": "uint8", "value": 1},
                        5: {"type": "uint8", "value": len(agents)}}
+            if data.get(1):
+                message[1] = {"type": "cstring", "value": data[1]}
             for index, agent in enumerate(agents):
                 message[str(100 + index * 2)] = {"type": "cstring", "value": agent["id"]}
                 message[str(101 + index * 2)] = {"type": "cstring", "value": agent["label"]}
@@ -136,17 +142,22 @@ class BridgeHarness:
         elif kind == 2:
             request_id = data.get(1, "")
             self.last_request_id = request_id
+            self.event_sequence = 0
             events = self.config.get("events", [{"kind": 11}])
             self._send_events(request_id, events)
 
     def _send_events(self, request_id, events):
         for event in events:
             time.sleep(event.get("delayMs", 0) / 1000)
+            self.event_sequence += 1
             message = {
                 "0": {"type": "uint8", "value": event["kind"]},
                 "1": {"type": "cstring", "value": request_id},
                 "7": {"type": "uint16", "value": event.get("chunkIndex", 0)},
                 "8": {"type": "uint16", "value": event.get("chunkCount", 1)},
+                "9": {"type": "uint8", "value": 1},
+                "10": {"type": "uint16", "value": event.get("sequence", self.event_sequence)},
+                "11": {"type": "uint8", "value": event.get("flags", 0)},
             }
             if "text" in event:
                 message["3"] = {"type": "cstring", "value": event["text"]}

@@ -188,8 +188,8 @@ class MainActivity : ComponentActivity() {
 
     private fun renderLatest(doctor: DoctorStatus?): String {
         if (activeRequestId != null) return latestStatus.text.toString()
-        val stream = state.loadStream()
-        if (stream?.running == true) return "Agent turn in progress"
+        val turn = state.loadTurn()
+        if (turn != null && turn.state != TurnState.TERMINAL) return "Agent turn in progress"
         val result = state.loadResult()
         if (result?.kind == TermuxCommandRunner.KIND_SEND) {
             val event = runCatching {

@@ -62,14 +62,25 @@ AppMessage keys:
 | `6` | phone to watch | stable router error code |
 | `7` | phone to watch | zero-based response chunk index |
 | `8` | phone to watch | total response chunk count |
+| `9` | both | protocol version (`1`) |
+| `10` | both | monotonic event sequence / last applied sequence |
+| `11` | phone to watch | flags: truncated, ambiguous, or cached |
 | `100+` | phone to watch | paired agent ID and label fields |
 
-Watch commands are `1` refresh agents and `2` send. Phone events are `10`
-agents, `11` accepted, `12` commentary, `13` completed, and `14` failed.
+Watch commands are `1` refresh agents, `2` send, and `3` reconcile. Phone
+events are `10` agents, `11` accepted, `12` commentary, `13` completed, `14`
+failed, `15` status unknown, and `16` agent refresh failed.
 Incoming Pebble numeric values are accepted in their PebbleKit2-normalized
-32-bit form. Every send requires a stable request ID; the companion retains a
-bounded deduplication set and replays the most recent known state instead of
-starting a duplicate turn. UTF-8 response text is split into ordered chunks.
+32-bit form. Every message carries protocol version `1`. The companion
+durably stores one request-bound turn and replays or reconciles it instead of
+starting a duplicate. Watch projections are UTF-8-safe, visibly truncated at
+5,600 bytes, and split into at most eight 700-byte chunks with one shared
+event sequence.
+
+The Termux bridge forwards live events over loopback but keeps the
+`PendingIntent` result bounded to the terminal JSON event. That terminal result
+remains authoritative after Android service/process loss. Ambiguous outcomes
+are rendered as **STATUS UNKNOWN** and are never automatically resubmitted.
 
 ## Build and test
 
