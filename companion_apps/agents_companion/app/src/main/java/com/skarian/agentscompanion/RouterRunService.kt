@@ -65,7 +65,13 @@ class RouterRunService : Service() {
                 val updated=CompanionState(this).updateTurn(requestId) { current ->
                     if(sequence<=current.sequence || current.state==TurnState.TERMINAL) current else current.copy(state=if(terminal) TurnState.TERMINAL else TurnState.RUNNING,eventType=event.type,text=event.text,code=event.code.orEmpty(),ambiguous=event.ambiguous,sequence=sequence)
                 } ?: return@use
-                if(updated.sequence==sequence) deliver(updated)
+                if(updated.sequence==sequence) {
+                    if (updated.text.isNotBlank()) {
+                        val historyId = if (updated.state == TurnState.TERMINAL) "${updated.requestId}/terminal" else "${updated.requestId}/event/${updated.sequence}"
+                        CompanionState(this).appendHistory(CachedMessage(historyId, updated.agentId, updated.requestId, updated.sequence, false, updated.text))
+                    }
+                    deliver(updated)
+                }
                 notifyText(event.text.ifBlank { event.type })
                 if(terminal) { socket.close(); stopSelf() }
             }

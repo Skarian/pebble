@@ -35,6 +35,10 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
             when (request.command) {
                 WatchCommand.REFRESH_AGENTS -> TermuxCommandRunner(this).refreshAgents(request.requestId ?: UUID.randomUUID().toString())
                 WatchCommand.RECONCILE -> coroutineScope.launch { replayTurn(session, requireNotNull(request.requestId), state, rebind = true) }
+                WatchCommand.HISTORY -> coroutineScope.launch {
+                    val agentId = requireNotNull(request.agentId)
+                    PebbleTransport(this@AgentsPebbleListenerService).sendHistory(session, requireNotNull(request.requestId), state.loadHistory(agentId))
+                }
                 WatchCommand.SEND -> {
                     val agentId = requireNotNull(request.agentId); val requestId = requireNotNull(request.requestId); val text = requireNotNull(request.text)
                     if (state.loadAgents().none { it.id == agentId }) {
@@ -45,8 +49,12 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
                     when (state.claimTurn(turn)) {
                         TurnClaim.DUPLICATE -> coroutineScope.launch { replayTurn(session, requestId, state, rebind = true) }
                         TurnClaim.BUSY -> coroutineScope.launch { PebbleTransport(this@AgentsPebbleListenerService).sendTextEvent(session, PhoneEvent.FAILED, requestId, "Another agent turn is already running.", "busy", 1) }
-                        TurnClaim.CLAIMED -> runCatching { RouterRunService.start(this, agentId, text, requestId) }.onFailure { error ->
+                        TurnClaim.CLAIMED -> runCatching {
+                            state.appendHistory(CachedMessage("$requestId/user", agentId, requestId, 0, true, text))
+                            RouterRunService.start(this, agentId, text, requestId)
+                        }.onFailure { error ->
                             val failed = state.updateTurn(requestId) { it.copy(state=TurnState.TERMINAL,eventType="failed",text="Could not start the agent turn.",code="bridge_start_failed",sequence=1) }
+                            failed?.let { state.appendHistory(CachedMessage("${it.requestId}/terminal", it.agentId, it.requestId, it.sequence, false, it.text)) }
                             failed?.let { coroutineScope.launch { replayTurn(session, requestId, state) } }; throw error
                         }
                     }

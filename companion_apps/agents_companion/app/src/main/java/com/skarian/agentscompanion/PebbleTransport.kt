@@ -5,6 +5,8 @@ import io.rebble.pebblekit2.client.DefaultPebbleSender
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 import io.rebble.pebblekit2.common.model.TransmissionResult
 import io.rebble.pebblekit2.common.model.WatchIdentifier
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 data class PebbleSession(val appUuid: UUID, val watchId: String)
@@ -37,7 +39,7 @@ class PebbleTransport(private val context: Context) {
         code: String? = null,
         sequence: Int = 0,
         ambiguous: Boolean = false,
-    ): List<TransmissionResult> {
+    ): List<TransmissionResult> = BATCH_LOCK.withLock {
         val projected = PebbleProtocol.projectText(text)
         val chunks = PebbleProtocol.chunkText(projected.text)
         val flags = (if (projected.truncated) PebbleProtocol.FLAG_TRUNCATED else 0) or
@@ -51,6 +53,27 @@ class PebbleTransport(private val context: Context) {
             results += result
             if (result != TransmissionResult.Success) break
         }
-        return results
+        results
     }
+
+    suspend fun sendHistory(session: PebbleSession, requestId: String, messages: List<CachedMessage>): List<TransmissionResult> = BATCH_LOCK.withLock {
+        val results = mutableListOf<TransmissionResult>()
+        val projectedMessages = projectHistoryForWatch(messages)
+        for ((messageIndex, message) in projectedMessages.withIndex()) {
+            val projected = PebbleProtocol.projectText(message.text)
+            val chunks = PebbleProtocol.chunkText(projected.text)
+            val flags = (if (projected.truncated) PebbleProtocol.FLAG_TRUNCATED else 0) or
+                (if (message.user) PebbleProtocol.FLAG_USER else 0)
+            for ((chunkIndex, chunk) in chunks.withIndex()) {
+                val result = send(session, PebbleProtocol.event(PhoneEvent.HISTORY_ITEM, requestId, chunk,
+                    chunkIndex = chunkIndex, chunkCount = chunks.size, sequence = messageIndex + 1, flags = flags))
+                results += result
+                if (result != TransmissionResult.Success) return@withLock results
+            }
+        }
+        results += send(session, PebbleProtocol.event(PhoneEvent.HISTORY_END, requestId, sequence = projectedMessages.size))
+        results
+    }
+
+    private companion object { val BATCH_LOCK = Mutex() }
 }

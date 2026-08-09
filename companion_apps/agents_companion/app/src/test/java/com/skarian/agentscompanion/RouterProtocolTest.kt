@@ -93,6 +93,38 @@ class RouterProtocolTest {
     }
 
     @Test
+    fun `watch history request carries only agent and request identity`() {
+        val request = PebbleProtocol.parseWatchRequest(mapOf(
+            PebbleProtocol.KEY_KIND to PebbleDictionaryItem.UInt32(WatchCommand.HISTORY.wireValue.toUInt()),
+            PebbleProtocol.KEY_PROTOCOL to PebbleDictionaryItem.UInt32(PebbleProtocol.VERSION.toUInt()),
+            PebbleProtocol.KEY_REQUEST_ID to PebbleDictionaryItem.Text("history-1"),
+            PebbleProtocol.KEY_AGENT_ID to PebbleDictionaryItem.Text("home"),
+        ))
+        assertEquals(WatchCommand.HISTORY, request.command)
+        assertEquals("home", request.agentId)
+    }
+
+    @Test
+    fun `history is deduplicated and bounded per agent`() {
+        val messages = (1..22).fold(emptyList<CachedMessage>()) { current, sequence ->
+            mergeHistory(current, CachedMessage("r/$sequence", "home", "r", sequence, false, "message $sequence", sequence.toLong()))
+        }
+        val corrected = mergeHistory(messages, CachedMessage("r/22", "home", "r", 23, false, "corrected", 99))
+        assertEquals(20, corrected.size)
+        assertEquals("message 3", corrected.first().text)
+        assertEquals("corrected", corrected.last().text)
+    }
+
+    @Test
+    fun `watch history projection respects item and aggregate byte limits`() {
+        val messages = (1..20).map { CachedMessage("r-$it", "home", "r-$it", it, false, "x".repeat(2000), it.toLong()) }
+        val projected = projectHistoryForWatch(messages)
+        assertTrue(projected.size <= PebbleProtocol.MAX_HISTORY_ITEMS)
+        assertTrue(projected.sumOf { it.text.toByteArray().size + 1 } <= PebbleProtocol.MAX_HISTORY_BYTES)
+        assertEquals("r-20", projected.last().requestId)
+    }
+
+    @Test
     fun `agent response uses stable paired keys`() {
         val message = PebbleProtocol.agents(
             listOf(AgentSummary("home", "Home"), AgentSummary("pebble", "Pebble")),

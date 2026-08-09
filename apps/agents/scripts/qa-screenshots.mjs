@@ -169,6 +169,10 @@ async function main() {
     }
 
     await capture('FIRST AGENT - LAUNCH TARGET', {message: agentsMessage()});
+    await capture('NO RETAINED MESSAGES', {
+      buttons: [{button: 'select', durationMs: 1000}], waitMs: 250, skipStable: true,
+    });
+    await capture('BACK FROM EMPTY HISTORY', {buttons: ['back']});
     await capture('AGENT SUMMARY - REFRESH', {buttons: ['up']});
     await capture('SECOND AGENT', {buttons: ['down', 'down']});
     await capture('NATIVE DICTATION - LISTENING', {
@@ -197,12 +201,28 @@ async function main() {
     if (readFileSync(commentaryTop.path).equals(readFileSync(commentaryScrolled.path))) {
       throw new Error('Streaming commentary did not visibly scroll');
     }
-    await capture('FINAL RESPONSE', {
-      bridge: {pushEvents: [{kind: 13, text: 'Deployment is complete and all health checks are passing.'}]},
+    const finalTop = await capture('FINAL RESPONSE', {
+      bridge: {pushEvents: [{kind: 13, text: 'Deployment is complete and all health checks are passing. The service rollout finished in every region, database migrations are current, background workers are healthy, queued jobs are draining normally, cache hit rates are stable, scheduled tasks are running, and the latest production checks show no active alerts or degraded dependencies.'}]},
     });
+    const finalScrolled = await capture('FINAL RESPONSE - SCROLLED', {
+      buttons: ['down', 'down', 'down', 'down'], skipStable: true, waitMs: 100,
+    });
+    if (readFileSync(finalTop.path).equals(readFileSync(finalScrolled.path))) {
+      throw new Error('Final response did not visibly scroll above its fixed reply footer');
+    }
     await capture('MESSAGE HISTORY - NEWEST', {
       buttons: [{button: 'select', durationMs: 1000}], waitMs: 250, skipStable: true,
     });
+    const historyMessageTop = await capture('HISTORY MESSAGE - FULL SCREEN', {
+      buttons: ['select'], waitMs: 250,
+    });
+    const historyMessageScrolled = await capture('HISTORY MESSAGE - SCROLLED', {
+      buttons: ['down', 'down', 'down'], waitMs: 100, skipStable: true,
+    });
+    if (readFileSync(historyMessageTop.path).equals(readFileSync(historyMessageScrolled.path))) {
+      throw new Error('Full history message did not visibly scroll');
+    }
+    await capture('BACK TO MESSAGE HISTORY', {buttons: ['back']});
     const marqueeStart = await capture('MESSAGE HISTORY - MARQUEE START', {
       buttons: ['up'], skipStable: true, waitMs: 100,
     });
@@ -214,6 +234,10 @@ async function main() {
     }
     await capture('BACK TO FINAL RESPONSE', {buttons: ['back']});
     await capture('AGENT READY AFTER TURN', {buttons: ['back']});
+    await capture('MESSAGE HISTORY - FROM AGENT', {
+      buttons: [{button: 'select', durationMs: 1000}], waitMs: 250, skipStable: true,
+    });
+    await capture('BACK TO AGENT FROM HISTORY', {buttons: ['back']});
     await capture('NO AGENTS', {
       buttons: ['up', 'select'], bridge: {agents: []}, waitMs: 250,
     });

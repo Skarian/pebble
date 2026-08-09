@@ -39,6 +39,7 @@ class TermuxResultReceiver : BroadcastReceiver() {
             else if(terminal!=null) current.copy(state=TurnState.TERMINAL,eventType=terminal.type,text=terminal.text,code=terminal.code.orEmpty(),ambiguous=terminal.ambiguous,sequence=(current.sequence+1).coerceAtMost(65535))
             else current.copy(state=TurnState.TERMINAL,eventType="failed",text="The agent may have received your message.",code="status_unknown",ambiguous=true,sequence=(current.sequence+1).coerceAtMost(65535))
         } ?: return
+        if (turn.text.isNotBlank()) state.appendHistory(CachedMessage("${turn.requestId}/terminal", turn.agentId, turn.requestId, turn.sequence, false, turn.text))
         val kind=when { turn.ambiguous->PhoneEvent.STATUS_UNKNOWN; turn.eventType=="completed"->PhoneEvent.COMPLETED; else->PhoneEvent.FAILED }
         PebbleTransport(context).sendTextEvent(turn.session,kind,turn.requestId,turn.text,turn.code,turn.sequence,turn.ambiguous)
         context.stopService(Intent(context, RouterRunService::class.java))

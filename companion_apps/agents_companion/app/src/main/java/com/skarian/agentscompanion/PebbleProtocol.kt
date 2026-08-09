@@ -2,10 +2,10 @@ package com.skarian.agentscompanion
 
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 
-enum class WatchCommand(val wireValue: UByte) { REFRESH_AGENTS(1u), SEND(2u), RECONCILE(3u) }
+enum class WatchCommand(val wireValue: UByte) { REFRESH_AGENTS(1u), SEND(2u), RECONCILE(3u), HISTORY(4u) }
 enum class PhoneEvent(val wireValue: UByte) {
     AGENTS(10u), ACCEPTED(11u), COMMENTARY(12u), COMPLETED(13u), FAILED(14u),
-    STATUS_UNKNOWN(15u), AGENTS_FAILED(16u),
+    STATUS_UNKNOWN(15u), AGENTS_FAILED(16u), HISTORY_ITEM(17u), HISTORY_END(18u),
 }
 
 data class WatchRequest(
@@ -34,6 +34,7 @@ object PebbleProtocol {
     const val FLAG_TRUNCATED = 0x01
     const val FLAG_AMBIGUOUS = 0x02
     const val FLAG_CACHED = 0x04
+    const val FLAG_USER = 0x08
     const val MAX_AGENTS = 16
     const val MAX_AGENT_ID_BYTES = 32
     const val MAX_AGENT_LABEL_BYTES = 64
@@ -41,6 +42,8 @@ object PebbleProtocol {
     const val CHUNK_BYTES = 700
     const val MAX_CHUNKS = 8
     const val MAX_WATCH_TEXT_BYTES = CHUNK_BYTES * MAX_CHUNKS
+    const val MAX_HISTORY_ITEMS = 16
+    const val MAX_HISTORY_BYTES = 18000
     private const val TRUNCATION_SUFFIX = "\n\n[TRUNCATED ON WATCH]"
 
     fun parseWatchRequest(data: Map<UInt, PebbleDictionaryItem>): WatchRequest {
@@ -57,8 +60,11 @@ object PebbleProtocol {
             return WatchRequest(command, requestId = requestId, lastSequence = sequence)
         }
         val agentId = text(data[KEY_AGENT_ID])
-        val transcript = text(data[KEY_TEXT])
         require(agentId.matches(Regex("[a-z][a-z0-9-]*")) && utf8(agentId) <= MAX_AGENT_ID_BYTES) { "Invalid agent id." }
+        if (command == WatchCommand.HISTORY) {
+            return WatchRequest(command, agentId = agentId, requestId = requestId)
+        }
+        val transcript = text(data[KEY_TEXT])
         require(transcript.isNotBlank() && utf8(transcript) <= MAX_TRANSCRIPT_BYTES) { "Invalid transcript." }
         val mode = if (data[KEY_MODE]?.let(::number)?.toInt() == 0) ExecutionMode.FINAL_JSON else ExecutionMode.STREAM
         return WatchRequest(command, agentId, transcript, requestId, mode)
@@ -120,4 +126,18 @@ object PebbleProtocol {
         is PebbleDictionaryItem.UInt8 -> item.value.toLong(); is PebbleDictionaryItem.Int8 -> item.value.toLong()
         else -> throw IllegalArgumentException("Required integer field is missing.")
     }
+}
+
+internal fun projectHistoryForWatch(messages: List<CachedMessage>): List<CachedMessage> {
+    var bytes = 0
+    val newestFirst = mutableListOf<CachedMessage>()
+    for (message in messages.asReversed()) {
+        if (newestFirst.size >= PebbleProtocol.MAX_HISTORY_ITEMS) break
+        val projected = PebbleProtocol.projectText(message.text).text
+        val messageBytes = projected.toByteArray(Charsets.UTF_8).size + 1
+        if (bytes + messageBytes > PebbleProtocol.MAX_HISTORY_BYTES) break
+        newestFirst += message.copy(text = projected)
+        bytes += messageBytes
+    }
+    return newestFirst.asReversed()
 }

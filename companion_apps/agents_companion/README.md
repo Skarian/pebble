@@ -27,6 +27,9 @@ other watchapps.
    service.
 6. Progress and the final result are sent to the watch through PebbleKit2. The
    phone also receives a result notification.
+7. The companion durably caches the newest messages per agent. The watch asks
+   for a bounded history snapshot when Messages is opened, so watch restarts
+   and watchapp reinstalls do not erase conversation history.
 
 There is no persistent service in Termux, no local HTTP API, no arbitrary
 command execution surface, and no configuration editor in the app.
@@ -64,18 +67,26 @@ AppMessage keys:
 | `8` | phone to watch | total response chunk count |
 | `9` | both | protocol version (`1`) |
 | `10` | both | monotonic event sequence / last applied sequence |
-| `11` | phone to watch | flags: truncated, ambiguous, or cached |
+| `11` | phone to watch | flags: truncated, ambiguous, cached, or user-authored |
 | `100+` | phone to watch | paired agent ID and label fields |
 
-Watch commands are `1` refresh agents, `2` send, and `3` reconcile. Phone
+Watch commands are `1` refresh agents, `2` send, `3` reconcile, and `4`
+request history. Phone
 events are `10` agents, `11` accepted, `12` commentary, `13` completed, `14`
-failed, `15` status unknown, and `16` agent refresh failed.
+failed, `15` status unknown, `16` agent refresh failed, `17` history item, and
+`18` history end.
 Incoming Pebble numeric values are accepted in their PebbleKit2-normalized
 32-bit form. Every message carries protocol version `1`. The companion
 durably stores one request-bound turn and replays or reconciles it instead of
 starting a duplicate. Watch projections are UTF-8-safe, visibly truncated at
 5,600 bytes, and split into at most eight 700-byte chunks with one shared
 event sequence.
+
+History is stored per agent in the companion's private app data, deduplicated
+by request/event identity, and bounded to the newest 20 messages per agent.
+Snapshots sent to the watch retain the newest suffix that fits the watch's
+16-message and 18,000-byte limits. Uninstalling the companion or clearing its
+Android app data clears this cache; reinstalling the watchapp does not.
 
 The Termux bridge forwards live events over loopback but keeps the
 `PendingIntent` result bounded to the terminal JSON event. That terminal result

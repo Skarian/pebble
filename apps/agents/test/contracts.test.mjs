@@ -42,3 +42,36 @@ test('turn recovery remains replayable across transport loss and relaunch', () =
   assert.match(source, /s_turn_phase = TURN_WORKING;\s*s_reconciling = false; persist_turn\(\); response_timeout\(NULL\)/);
   assert.match(source, /kind == COMMAND_RECONCILE/);
 });
+
+test('screen changes wake the backlight and final text is clipped above reply footer', () => {
+  assert.match(source, /static void render\(void\)[\s\S]*light_enable_interaction\(\)/);
+  assert.match(source, /viewport_height = has_footer \? 170 : 198/);
+  assert.match(source, /GRect\(7, 204, 186, 22\)/);
+  assert.match(source, /s_message_layer = make_text[\s\S]*FONT_KEY_GOTHIC_28/);
+});
+
+test('successful phone delivery advances sending to working before agent events arrive', () => {
+  assert.match(source, /static void outbox_sent[\s\S]*kind != COMMAND_SEND[\s\S]*s_turn_phase = TURN_WORKING/);
+  assert.match(source, /if \(s_screen == SCREEN_SENDING\) s_screen = SCREEN_STREAMING/);
+  assert.match(source, /app_message_register_outbox_sent\(outbox_sent\)/);
+});
+
+test('long select requests companion-owned history from its individual agent screen', () => {
+  assert.match(source, /s_screen == SCREEN_BROWSE && s_page_index > 0[\s\S]*open_history\(\)/);
+  assert.match(source, /COMMAND_HISTORY = 4/);
+  assert.match(source, /dict_write_uint8\(out, MESSAGE_KEY_KIND, COMMAND_HISTORY\)/);
+  assert.match(source, /dict_write_cstring\(out, MESSAGE_KEY_AGENT_ID, s_history_agent_id\)/);
+  assert.match(source, /EVENT_HISTORY_ITEM = 17/);
+  assert.match(source, /EVENT_HISTORY_END = 18/);
+  assert.match(source, /s_history_count == 0[\s\S]*render_state\("NO MESSAGES"/);
+  assert.doesNotMatch(source, /append_history\(s_transcript/);
+  assert.doesNotMatch(source, /kind == EVENT_COMMENTARY\) \{\s*append_history/);
+});
+
+test('history rows open into a scrollable full-message reader and return to the list', () => {
+  assert.match(source, /SCREEN_HISTORY_MESSAGE/);
+  assert.match(source, /static void open_history_message[\s\S]*s_message_scroll = 0[\s\S]*SCREEN_HISTORY_MESSAGE/);
+  assert.match(source, /s_screen == SCREEN_HISTORY_MESSAGE[\s\S]*scroll_message\(-SCROLL_STEP\)/);
+  assert.match(source, /s_screen == SCREEN_HISTORY[\s\S]*open_history_message\(\)/);
+  assert.match(source, /if \(s_screen == SCREEN_HISTORY_MESSAGE\)[\s\S]*s_screen = SCREEN_HISTORY/);
+});

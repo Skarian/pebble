@@ -12,6 +12,7 @@
 #define RESPONSE_TIMEOUT_MS 30000
 #define WORKING_TIMEOUT_MS 60000
 #define CHUNK_TIMEOUT_MS 5000
+#define HISTORY_TIMEOUT_MS 10000
 #define SCROLL_STEP 28
 #define SPINNER_INTERVAL_MS 125
 #define MARQUEE_INTERVAL_MS 100
@@ -23,6 +24,7 @@
 #define PERSIST_COUNTER_KEY 7230
 #define PERSIST_TURN_KEY 7231
 #define CACHE_VERSION 1
+#define FLAG_HISTORY_USER 0x08
 #define VALUE_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define VALUE_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define VALUE_CLAMP(value, low, high) VALUE_MIN(VALUE_MAX((value), (low)), (high))
@@ -31,6 +33,7 @@ enum {
   COMMAND_REFRESH_AGENTS = 1,
   COMMAND_SEND = 2,
   COMMAND_RECONCILE = 3,
+  COMMAND_HISTORY = 4,
 };
 
 enum {
@@ -41,6 +44,8 @@ enum {
   EVENT_FAILED = 14,
   EVENT_STATUS_UNKNOWN = 15,
   EVENT_AGENTS_FAILED = 16,
+  EVENT_HISTORY_ITEM = 17,
+  EVENT_HISTORY_END = 18,
 #ifdef AGENTS_QA
   EVENT_QA_ERROR = 240,
 #endif
@@ -53,6 +58,7 @@ typedef enum {
   SCREEN_STREAMING,
   SCREEN_FINAL,
   SCREEN_HISTORY,
+  SCREEN_HISTORY_MESSAGE,
   SCREEN_ERROR,
 } Screen;
 
@@ -141,12 +147,25 @@ static char s_chunks[MAX_CHUNKS][CHUNK_BYTES];
 static char s_last_event[MAX_MESSAGE_BYTES + 1];
 static uint8_t s_last_event_kind;
 
+static char s_history_request_id[65];
+static char s_history_agent_id[MAX_AGENT_ID + 1];
+static uint16_t s_history_chunk_sequence;
+static uint16_t s_history_last_sequence;
+static uint8_t s_history_chunk_count;
+static uint16_t s_history_chunk_mask;
+static uint8_t s_history_chunk_flags;
+static char s_history_chunks[MAX_CHUNKS][CHUNK_BYTES];
+static char s_history_message[MAX_MESSAGE_BYTES + 1];
+static bool s_history_loading;
+static bool s_history_failed;
+
 static DictationSession *s_dictation;
 static AppTimer *s_response_timer;
 static AppTimer *s_refresh_timer;
 static AppTimer *s_chunk_timer;
 static AppTimer *s_spinner_timer;
 static AppTimer *s_marquee_timer;
+static AppTimer *s_history_timer;
 static uint8_t s_spinner_frame;
 static bool s_refresh_had_cache;
 static bool s_reconciling;
@@ -208,6 +227,10 @@ static void cancel_chunk_timer(void) {
   if (s_chunk_timer) { app_timer_cancel(s_chunk_timer); s_chunk_timer = NULL; }
 }
 
+static void cancel_history_timer(void) {
+  if (s_history_timer) { app_timer_cancel(s_history_timer); s_history_timer = NULL; }
+}
+
 static void persist_turn(void) {
   if (s_turn_phase == TURN_IDLE || !s_request_id[0]) { persist_delete(PERSIST_TURN_KEY); return; }
   PersistedTurn value = {.version = 1, .phase = s_turn_phase, .last_sequence = s_last_sequence};
@@ -226,7 +249,7 @@ static void clear_turn(void) {
 
 static bool spinner_active(void) {
   return s_screen == SCREEN_SYNCING || s_screen == SCREEN_SENDING ||
-         s_screen == SCREEN_STREAMING;
+         s_screen == SCREEN_STREAMING || (s_screen == SCREEN_HISTORY && s_history_loading);
 }
 
 static void spinner_tick(void *context) {
@@ -308,7 +331,7 @@ static void set_turn_header(void) {
 
 static int16_t measured_message_height(const char *text, int16_t width) {
   GSize size = graphics_text_layout_get_content_size(
-    text ? text : "", fonts_get_system_font(FONT_KEY_GOTHIC_24),
+    text ? text : "", fonts_get_system_font(FONT_KEY_GOTHIC_28),
     GRect(0, 0, width, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
   return VALUE_MAX(32, size.h + 8);
 }
@@ -323,7 +346,11 @@ static void configure_message(const char *text, bool has_footer) {
                   GRect(8, -s_message_scroll, 184, content_height));
   text_layer_set_text(s_message_layer, text ? text : "");
   layer_set_hidden(s_content_clip, false);
-  if (has_footer) text_layer_set_text(s_footer_layer, "SELECT TO REPLY");
+  if (has_footer) {
+    layer_set_frame(text_layer_get_layer(s_footer_layer), GRect(7, 204, 186, 22));
+    text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text(s_footer_layer, "SELECT TO REPLY");
+  }
 }
 
 static void configure_summary(void) {
@@ -490,17 +517,44 @@ static void history_draw(Layer *layer, GContext *ctx) {
 }
 
 static void render_history(void) {
+  text_layer_set_text(s_header_left, "MESSAGES");
+  if (s_history_loading) {
+    text_layer_set_text(s_header_right, "");
+    render_state("LOADING...", "", "BACK TO AGENT");
+    return;
+  }
+  if (s_history_failed) {
+    text_layer_set_text(s_header_right, "");
+    render_state("COULD NOT LOAD", "", "SELECT TO RETRY");
+    return;
+  }
+  if (s_history_count == 0) {
+    text_layer_set_text(s_header_right, "");
+    render_state("NO MESSAGES", "", "BACK TO AGENT");
+    return;
+  }
   static char position[12];
   snprintf(position, sizeof(position), "%u/%u", s_history_selected + 1, s_history_count);
-  text_layer_set_text(s_header_left, "MESSAGES");
   text_layer_set_text(s_header_right, position);
   layer_set_frame(s_history_layer, GRect(0, 28, 200, 200));
   layer_set_hidden(s_history_layer, false);
   layer_mark_dirty(s_history_layer);
 }
 
+static void render_history_message(void) {
+  static char position[12];
+  if (s_history_selected >= s_history_count) return;
+  snprintf(position, sizeof(position), "%u/%u", s_history_selected + 1, s_history_count);
+  text_layer_set_text(s_header_left, s_history[s_history_selected].user ? "YOU" : "AGENT");
+  text_layer_set_text(s_header_right, position);
+  configure_message(s_history[s_history_selected].text, false);
+}
+
 static void render(void) {
   if (!s_window) return;
+#if PBL_API_EXISTS(light_enable_interaction)
+  light_enable_interaction();
+#endif
   clear_layers();
   layer_set_frame(text_layer_get_layer(s_header_left), GRect(7, 0, 132, 28));
   layer_set_frame(text_layer_get_layer(s_header_right), GRect(139, 0, 54, 28));
@@ -532,6 +586,8 @@ static void render(void) {
     configure_message(s_current_message[0] ? s_current_message : "No response was returned.", true);
   } else if (s_screen == SCREEN_HISTORY) {
     render_history();
+  } else if (s_screen == SCREEN_HISTORY_MESSAGE) {
+    render_history_message();
   } else if (s_screen == SCREEN_ERROR) {
     render_error();
   }
@@ -552,6 +608,12 @@ static void drop_oldest_history(void) {
   for (uint8_t i = 1; i < s_history_count; i++) s_history[i - 1] = s_history[i];
   s_history_count--;
   if (s_history_selected > 0) s_history_selected--;
+}
+
+static void clear_history(void) {
+  while (s_history_count > 0) drop_oldest_history();
+  s_history_selected = 0;
+  s_history_first_visible = 0;
 }
 
 static void append_history(const char *text, bool user) {
@@ -601,21 +663,19 @@ static void accept_logical_event(uint8_t kind, uint16_t sequence, uint8_t flags,
   copy_text(s_current_message, sizeof(s_current_message), text);
   s_message_scroll = 0;
   if (kind == EVENT_COMMENTARY) {
-    append_history(text, false);
     s_turn_phase = TURN_WORKING;
-    if (s_screen != SCREEN_HISTORY && s_screen != SCREEN_BROWSE) s_screen = SCREEN_STREAMING;
+    if (s_screen != SCREEN_HISTORY && s_screen != SCREEN_HISTORY_MESSAGE && s_screen != SCREEN_BROWSE) s_screen = SCREEN_STREAMING;
     s_reconciling = false; begin_timeout();
   } else if (kind == EVENT_COMPLETED) {
-    append_history(text, false);
     s_turn_phase = TURN_COMPLETE;
-    if (s_screen == SCREEN_HISTORY) s_history_return_screen = SCREEN_FINAL;
+    if (s_screen == SCREEN_HISTORY || s_screen == SCREEN_HISTORY_MESSAGE) s_history_return_screen = SCREEN_FINAL;
     else if (s_screen != SCREEN_BROWSE) s_screen = SCREEN_FINAL;
     vibes_short_pulse();
     cancel_response_timer();
   } else if (kind == EVENT_FAILED) {
     s_turn_phase = TURN_FAILED;
     copy_text(s_error_text, sizeof(s_error_text), text && text[0] ? text : code);
-    if (s_screen == SCREEN_HISTORY) s_history_return_screen = SCREEN_ERROR;
+    if (s_screen == SCREEN_HISTORY || s_screen == SCREEN_HISTORY_MESSAGE) s_history_return_screen = SCREEN_ERROR;
     else if (s_screen != SCREEN_BROWSE) {
       s_error = ERROR_AGENT_FAILED;
       s_screen = SCREEN_ERROR;
@@ -624,7 +684,7 @@ static void accept_logical_event(uint8_t kind, uint16_t sequence, uint8_t flags,
     cancel_response_timer();
   } else if (kind == EVENT_STATUS_UNKNOWN) {
     s_turn_phase = TURN_UNKNOWN; s_error = ERROR_DELIVERY_UNKNOWN;
-    if (s_screen == SCREEN_HISTORY) s_history_return_screen = SCREEN_ERROR;
+    if (s_screen == SCREEN_HISTORY || s_screen == SCREEN_HISTORY_MESSAGE) s_history_return_screen = SCREEN_ERROR;
     else if (s_screen != SCREEN_BROWSE) s_screen = SCREEN_ERROR;
     cancel_response_timer(); vibes_double_pulse();
   }
@@ -666,6 +726,67 @@ static void receive_chunk(uint8_t kind, const char *request_id, const char *text
   }
   clear_chunk_assembly();
   accept_logical_event(kind, sequence, flags, assembled, code);
+}
+
+static void clear_history_chunk_assembly(void) {
+  s_history_chunk_sequence = 0;
+  s_history_chunk_count = 0;
+  s_history_chunk_mask = 0;
+  s_history_chunk_flags = 0;
+  for (uint8_t i = 0; i < MAX_CHUNKS; i++) s_history_chunks[i][0] = '\0';
+}
+
+static void fail_history(void) {
+  cancel_history_timer();
+  clear_history_chunk_assembly();
+  s_history_loading = false;
+  s_history_failed = true;
+  if (s_screen == SCREEN_HISTORY) render();
+}
+
+static void history_timeout(void *context) {
+  s_history_timer = NULL;
+  fail_history();
+}
+
+static void receive_history_chunk(const char *request_id, const char *text,
+                                  uint16_t index, uint16_t count, uint16_t sequence,
+                                  uint8_t flags) {
+  if (!s_history_loading || !request_id || strcmp(request_id, s_history_request_id) != 0) return;
+  if (sequence == 0 || sequence > MAX_HISTORY || count == 0 || count > MAX_CHUNKS || index >= count) {
+    fail_history();
+    return;
+  }
+  if (s_history_chunk_sequence != sequence) {
+    if (s_history_chunk_sequence != 0 || sequence != s_history_last_sequence + 1) {
+      fail_history();
+      return;
+    }
+    clear_history_chunk_assembly();
+    s_history_chunk_sequence = sequence;
+    s_history_chunk_count = count;
+    s_history_chunk_flags = flags;
+  } else if (s_history_chunk_count != count || s_history_chunk_flags != flags) {
+    fail_history();
+    return;
+  }
+  copy_text(s_history_chunks[index], sizeof(s_history_chunks[index]), text);
+  s_history_chunk_mask |= (1u << index);
+  cancel_history_timer(); s_history_timer = app_timer_register(HISTORY_TIMEOUT_MS, history_timeout, NULL);
+  uint16_t expected = (1u << count) - 1;
+  if (s_history_chunk_mask != expected) return;
+  s_history_message[0] = '\0';
+  size_t used = 0;
+  for (uint8_t i = 0; i < count; i++) {
+    size_t available = sizeof(s_history_message) - used - 1;
+    size_t length = VALUE_MIN(strlen(s_history_chunks[i]), available);
+    memcpy(s_history_message + used, s_history_chunks[i], length);
+    used += length;
+    s_history_message[used] = '\0';
+  }
+  append_history(s_history_message, (flags & FLAG_HISTORY_USER) != 0);
+  s_history_last_sequence = sequence;
+  clear_history_chunk_assembly();
 }
 
 static void persist_agents(void) {
@@ -762,8 +883,7 @@ static void send_transcript(bool retry) {
     persist_write_int(PERSIST_COUNTER_KEY, s_request_counter);
     snprintf(s_request_id, sizeof(s_request_id), "%lu-%u",
              (unsigned long)time(NULL), s_request_counter);
-    if (new_root) while (s_history_count) drop_oldest_history();
-    append_history(s_transcript, true);
+    if (new_root) clear_history();
     s_last_event[0] = '\0';
     s_last_event_kind = 0;
     s_last_sequence = 0;
@@ -870,7 +990,7 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     return;
   }
 #endif
-  if (kind < EVENT_AGENTS || kind > EVENT_AGENTS_FAILED) return;
+  if (kind < EVENT_AGENTS || kind > EVENT_HISTORY_END) return;
   uint32_t protocol = tuple_uint(dict_find(iterator, MESSAGE_KEY_PROTOCOL), 0);
   if (protocol != 1) { static char mismatch[40]; snprintf(mismatch, sizeof(mismatch), "Protocol %lu event %u", (unsigned long)protocol, kind); show_error(ERROR_UPDATE_REQUIRED, mismatch); return; }
   if (kind == EVENT_AGENTS) {
@@ -879,6 +999,29 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
   }
   const char *request_id = tuple_cstring(dict_find(iterator, MESSAGE_KEY_REQUEST_ID));
   uint32_t raw_sequence = tuple_uint(dict_find(iterator, MESSAGE_KEY_EVENT_SEQUENCE), 0);
+  if (kind == EVENT_HISTORY_ITEM) {
+    const char *text = tuple_cstring(dict_find(iterator, MESSAGE_KEY_TEXT));
+    uint32_t index = tuple_uint(dict_find(iterator, MESSAGE_KEY_CHUNK_INDEX), 0);
+    uint32_t count = tuple_uint(dict_find(iterator, MESSAGE_KEY_CHUNK_COUNT), 1);
+    uint32_t flags = tuple_uint(dict_find(iterator, MESSAGE_KEY_FLAGS), 0);
+    if (raw_sequence > 65535 || index > 65535 || count > 65535 || flags > 255) { fail_history(); return; }
+    receive_history_chunk(request_id, text ? text : "", index, count, raw_sequence, flags);
+    return;
+  }
+  if (kind == EVENT_HISTORY_END) {
+    if (!s_history_loading || !request_id || strcmp(request_id, s_history_request_id) != 0) return;
+    if (raw_sequence != s_history_last_sequence || s_history_chunk_sequence != 0 || s_history_count != raw_sequence) {
+      fail_history();
+      return;
+    }
+    cancel_history_timer();
+    s_history_loading = false;
+    s_history_failed = false;
+    s_history_selected = s_history_count > 0 ? s_history_count - 1 : 0;
+    s_history_first_visible = s_history_count > 0 ? VALUE_MAX(0, s_history_count - 4) : 0;
+    render();
+    return;
+  }
   if (kind == EVENT_ACCEPTED) {
     if (!request_matches(request_id) || raw_sequence == 0 || raw_sequence > 65535) return;
     if (raw_sequence == s_last_sequence && s_reconciling) {
@@ -922,9 +1065,24 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
+  if (s_history_loading) fail_history();
   if (s_turn_phase == TURN_WORKING || s_turn_phase == TURN_SENDING) {
     cancel_response_timer(); s_reconciling = false; s_turn_phase = TURN_WORKING; begin_timeout();
   }
+}
+
+static void outbox_sent(DictionaryIterator *iterator, void *context) {
+  uint8_t kind = tuple_uint(dict_find(iterator, MESSAGE_KEY_KIND), 0);
+  if (kind != COMMAND_SEND || s_turn_phase != TURN_SENDING) return;
+
+  cancel_response_timer();
+  s_turn_phase = TURN_WORKING;
+  s_reconciling = false;
+  copy_text(s_current_message, sizeof(s_current_message), "WORKING...");
+  if (s_screen == SCREEN_SENDING) s_screen = SCREEN_STREAMING;
+  persist_turn();
+  begin_timeout();
+  render();
 }
 
 static void outbox_failed(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
@@ -937,6 +1095,8 @@ static void outbox_failed(DictionaryIterator *iterator, AppMessageResult reason,
     s_turn_phase = TURN_UNKNOWN; persist_turn(); show_error(ERROR_DELIVERY_UNKNOWN, "");
   } else if (kind == COMMAND_RECONCILE) {
     cancel_response_timer(); s_turn_phase = TURN_WORKING; s_reconciling = false; persist_turn(); begin_timeout();
+  } else if (kind == COMMAND_HISTORY) {
+    fail_history();
   }
 }
 
@@ -958,12 +1118,43 @@ static void update_history_window(void) {
 }
 
 static void open_history(void) {
-  if (s_history_count == 0) return;
-  s_history_return_screen = s_screen;
-  s_history_selected = s_history_count - 1;
-  s_history_first_visible = VALUE_MAX(0, s_history_count - 4);
+  if (s_screen != SCREEN_HISTORY) {
+    s_history_return_screen = s_screen;
+    const char *agent_id = s_screen == SCREEN_BROWSE && s_page_index > 0
+      ? s_agents[s_page_index - 1].id : s_turn_agent_id;
+    copy_text(s_history_agent_id, sizeof(s_history_agent_id), agent_id);
+  }
+  clear_history();
+  clear_history_chunk_assembly();
+  s_history_last_sequence = 0;
+  s_history_loading = true;
+  s_history_failed = false;
   reset_marquee();
   s_screen = SCREEN_HISTORY;
+  s_request_counter++; persist_write_int(PERSIST_COUNTER_KEY, s_request_counter);
+  snprintf(s_history_request_id, sizeof(s_history_request_id), "history-%lu-%u",
+           (unsigned long)time(NULL), s_request_counter);
+  DictionaryIterator *out;
+  if (!s_history_agent_id[0] || app_message_outbox_begin(&out) != APP_MSG_OK) {
+    fail_history();
+    return;
+  }
+  dict_write_uint8(out, MESSAGE_KEY_PROTOCOL, 1);
+  dict_write_uint8(out, MESSAGE_KEY_KIND, COMMAND_HISTORY);
+  dict_write_cstring(out, MESSAGE_KEY_REQUEST_ID, s_history_request_id);
+  dict_write_cstring(out, MESSAGE_KEY_AGENT_ID, s_history_agent_id);
+  if (app_message_outbox_send() != APP_MSG_OK) {
+    fail_history();
+    return;
+  }
+  cancel_history_timer(); s_history_timer = app_timer_register(HISTORY_TIMEOUT_MS, history_timeout, NULL);
+  render();
+}
+
+static void open_history_message(void) {
+  if (s_history_selected >= s_history_count) return;
+  s_message_scroll = 0;
+  s_screen = SCREEN_HISTORY_MESSAGE;
   render();
 }
 
@@ -971,7 +1162,8 @@ static void up_click(ClickRecognizerRef recognizer, void *context) {
   if (s_screen == SCREEN_BROWSE) {
     if (s_page_index > 0) s_page_index--;
     render();
-  } else if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL) {
+  } else if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL ||
+             s_screen == SCREEN_HISTORY_MESSAGE) {
     scroll_message(-SCROLL_STEP);
   } else if (s_screen == SCREEN_HISTORY && s_history_selected > 0) {
     s_history_selected--;
@@ -983,7 +1175,8 @@ static void down_click(ClickRecognizerRef recognizer, void *context) {
   if (s_screen == SCREEN_BROWSE) {
     if (s_page_index < s_agent_count) s_page_index++;
     render();
-  } else if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL) {
+  } else if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL ||
+             s_screen == SCREEN_HISTORY_MESSAGE) {
     scroll_message(SCROLL_STEP);
   } else if (s_screen == SCREEN_HISTORY && s_history_selected + 1 < s_history_count) {
     s_history_selected++;
@@ -1007,8 +1200,13 @@ static void view_active_turn(void) {
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_screen == SCREEN_HISTORY) {
+    if (s_history_failed) open_history();
+    else if (!s_history_loading) open_history_message();
+    return;
+  }
   if (s_screen == SCREEN_SYNCING || s_screen == SCREEN_SENDING ||
-      s_screen == SCREEN_STREAMING || s_screen == SCREEN_HISTORY) return;
+      s_screen == SCREEN_STREAMING || s_screen == SCREEN_HISTORY_MESSAGE) return;
   if (s_screen == SCREEN_BROWSE) {
     if (s_page_index == 0) { request_agents(); return; }
     uint8_t index = s_page_index - 1;
@@ -1035,11 +1233,25 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void long_select(ClickRecognizerRef recognizer, void *context) {
-  if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL) open_history();
+  if (s_screen == SCREEN_STREAMING || s_screen == SCREEN_FINAL) {
+    open_history();
+    return;
+  }
+  if (s_screen == SCREEN_BROWSE && s_page_index > 0) {
+    open_history();
+  }
 }
 
 static void back_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_screen == SCREEN_HISTORY_MESSAGE) {
+    reset_marquee();
+    s_screen = SCREEN_HISTORY;
+    render();
+    return;
+  }
   if (s_screen == SCREEN_HISTORY) {
+    cancel_history_timer();
+    s_history_loading = false;
     s_screen = s_history_return_screen;
     render();
     return;
@@ -1105,7 +1317,7 @@ static void window_load(Window *window) {
   s_content_clip = layer_create(GRect(0, 30, bounds.size.w, bounds.size.h - 30));
   layer_set_clips(s_content_clip, true);
   layer_add_child(root, s_content_clip);
-  s_message_layer = make_text(s_content_clip, GRect(8, 0, 184, 198), FONT_KEY_GOTHIC_24,
+  s_message_layer = make_text(s_content_clip, GRect(8, 0, 184, 198), FONT_KEY_GOTHIC_28,
                               GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_message_layer, GTextOverflowModeWordWrap);
   s_spinner_layer = layer_create(GRect(175, 4, 20, 20));
@@ -1151,6 +1363,7 @@ static void init(void) {
 
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
+  app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(2048, 1024);
   if (s_turn_phase != TURN_IDLE && s_request_id[0]) {
@@ -1170,6 +1383,7 @@ static void deinit(void) {
   cancel_response_timer();
   cancel_refresh_timer();
   cancel_chunk_timer();
+  cancel_history_timer();
   if (s_spinner_timer) app_timer_cancel(s_spinner_timer);
   if (s_marquee_timer) app_timer_cancel(s_marquee_timer);
   if (s_dictation) dictation_session_destroy(s_dictation);

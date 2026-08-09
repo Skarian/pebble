@@ -1,6 +1,7 @@
 package com.skarian.agentscompanion
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class StoredResult(val requestId: String, val kind: String, val mode: ExecutionMode?, val stdout: String,
@@ -14,6 +15,30 @@ data class StoredTurn(
 )
 enum class TurnClaim { CLAIMED, DUPLICATE, BUSY }
 data class DoctorStatus(val ok: Boolean, val summary: String)
+data class CachedMessage(
+    val id: String,
+    val agentId: String,
+    val requestId: String,
+    val sequence: Int,
+    val user: Boolean,
+    val text: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+internal fun mergeHistory(current: List<CachedMessage>, message: CachedMessage, maxPerAgent: Int = 20, maxBytesPerAgent: Int = 65536): List<CachedMessage> {
+    if (message.text.isBlank()) return current
+    val all = current.toMutableList()
+    val duplicate = all.indexOfFirst { it.agentId == message.agentId && it.id == message.id }
+    if (duplicate >= 0) all[duplicate] = message.copy(createdAt = all[duplicate].createdAt) else all += message
+    return all.groupBy { it.agentId }.values.flatMap { group ->
+        var bytes = 0
+        group.sortedBy(CachedMessage::createdAt).asReversed().take(maxPerAgent).takeWhile {
+            val next = it.text.toByteArray(Charsets.UTF_8).size + 1
+            (bytes + next <= maxBytesPerAgent).also { keep -> if (keep) bytes += next }
+        }.asReversed()
+    }
+        .sortedBy(CachedMessage::createdAt)
+}
 
 internal fun normalizeTurnUpdate(current: StoredTurn, transformed: StoredTurn, now: Long): StoredTurn {
     val semanticChange = transformed.state != current.state || transformed.eventType != current.eventType ||
@@ -43,6 +68,17 @@ class CompanionState(context: Context) {
     fun saveBridgeError(message: String) { preferences.edit().putString(KEY_BRIDGE_ERROR, message).apply() }
     fun loadBridgeError() = preferences.getString(KEY_BRIDGE_ERROR, "").orEmpty()
 
+    fun appendHistory(message: CachedMessage) = synchronized(HISTORY_LOCK) {
+        if (message.text.isBlank()) return@synchronized
+        val bounded = message.copy(text = PebbleProtocol.projectText(message.text).text)
+        val retained = mergeHistory(loadAllHistory(), bounded, MAX_HISTORY_PER_AGENT)
+        preferences.edit().putString(KEY_HISTORY, historyJson(retained).toString()).commit()
+    }
+
+    fun loadHistory(agentId: String): List<CachedMessage> = synchronized(HISTORY_LOCK) {
+        loadAllHistory().filter { it.agentId == agentId }.sortedBy(CachedMessage::createdAt).takeLast(MAX_HISTORY_PER_AGENT)
+    }
+
     fun claimTurn(turn: StoredTurn): TurnClaim = synchronized(TURN_LOCK) {
         val existing = loadTurn()
         if (existing?.requestId == turn.requestId) return@synchronized TurnClaim.DUPLICATE
@@ -69,5 +105,19 @@ class CompanionState(context: Context) {
 
     private fun turnJson(t: StoredTurn) = JSONObject().put("requestId",t.requestId).put("agentId",t.agentId).put("transcriptHash",t.transcriptHash).put("state",t.state.name).put("uuid",t.session.appUuid.toString()).put("watch",t.session.watchId).put("eventType",t.eventType).put("text",t.text).put("code",t.code).put("ambiguous",t.ambiguous).put("sequence",t.sequence).put("updatedAt",t.updatedAt)
     private fun parseTurn(j: JSONObject) = StoredTurn(j.getString("requestId"),j.getString("agentId"),j.getString("transcriptHash"),TurnState.valueOf(j.getString("state")),PebbleSession(java.util.UUID.fromString(j.getString("uuid")),j.getString("watch")),j.optString("eventType","accepted"),j.optString("text"),j.optString("code"),j.optBoolean("ambiguous"),j.optInt("sequence"),j.optLong("updatedAt"))
-    companion object { private val TURN_LOCK = Any(); private const val QUEUE_LEASE_TIMEOUT_MS=15_000L; private const val RUNNING_LEASE_TIMEOUT_MS=45_000L; private const val PREFERENCES="agents_companion"; private const val KEY_AGENTS="agents"; private const val KEY_AGENTS_UPDATED_AT="agents_updated_at"; private const val KEY_DOCTOR_OK="doctor_ok"; private const val KEY_DOCTOR_SUMMARY="doctor_summary"; private const val KEY_DOCTOR_UPDATED_AT="doctor_updated_at"; private const val KEY_PEBBLE_UUID="pebble_uuid"; private const val KEY_PEBBLE_WATCH="pebble_watch"; private const val KEY_PEBBLE_OPENED_AT="pebble_opened_at"; private const val KEY_BRIDGE_ERROR="bridge_error"; private const val KEY_TURN="active_turn_v2" }
+    private fun loadAllHistory(): List<CachedMessage> = preferences.getString(KEY_HISTORY, null)?.let { raw ->
+        runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    add(CachedMessage(item.getString("id"), item.getString("agentId"), item.getString("requestId"), item.getInt("sequence"), item.getBoolean("user"), item.getString("text"), item.getLong("createdAt")))
+                }
+            }
+        }.getOrDefault(emptyList())
+    } ?: emptyList()
+    private fun historyJson(messages: List<CachedMessage>) = JSONArray().apply {
+        messages.forEach { put(JSONObject().put("id",it.id).put("agentId",it.agentId).put("requestId",it.requestId).put("sequence",it.sequence).put("user",it.user).put("text",it.text).put("createdAt",it.createdAt)) }
+    }
+    companion object { private val TURN_LOCK = Any(); private val HISTORY_LOCK = Any(); private const val MAX_HISTORY_PER_AGENT=20; private const val QUEUE_LEASE_TIMEOUT_MS=15_000L; private const val RUNNING_LEASE_TIMEOUT_MS=45_000L; private const val PREFERENCES="agents_companion"; private const val KEY_AGENTS="agents"; private const val KEY_AGENTS_UPDATED_AT="agents_updated_at"; private const val KEY_DOCTOR_OK="doctor_ok"; private const val KEY_DOCTOR_SUMMARY="doctor_summary"; private const val KEY_DOCTOR_UPDATED_AT="doctor_updated_at"; private const val KEY_PEBBLE_UUID="pebble_uuid"; private const val KEY_PEBBLE_WATCH="pebble_watch"; private const val KEY_PEBBLE_OPENED_AT="pebble_opened_at"; private const val KEY_BRIDGE_ERROR="bridge_error"; private const val KEY_TURN="active_turn_v2"; private const val KEY_HISTORY="agent_history_v1" }
 }

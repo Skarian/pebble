@@ -107,6 +107,8 @@ class BridgeHarness:
         self.config = {}
         self.last_request_id = ""
         self.event_sequence = 0
+        self.request_agents = {}
+        self.history = {}
         appmessage.register_handler("appmessage", self._receive)
 
     def configure(self, config):
@@ -141,10 +143,16 @@ class BridgeHarness:
             send_app_message(self.appmessage, self.target, message)
         elif kind == 2:
             request_id = data.get(1, "")
+            agent_id = data.get(2, "")
             self.last_request_id = request_id
+            self.request_agents[request_id] = agent_id
+            if data.get(3):
+                self.history.setdefault(agent_id, []).append({"user": True, "text": data[3]})
             self.event_sequence = 0
             events = self.config.get("events", [{"kind": 11}])
             self._send_events(request_id, events)
+        elif kind == 4:
+            self._send_history(data.get(1, ""), data.get(2, ""))
 
     def _send_events(self, request_id, events):
         for event in events:
@@ -161,9 +169,46 @@ class BridgeHarness:
             }
             if "text" in event:
                 message["3"] = {"type": "cstring", "value": event["text"]}
+                if event["kind"] in (12, 13, 14, 15) and event["text"]:
+                    agent_id = self.request_agents.get(request_id, "")
+                    self.history.setdefault(agent_id, []).append({"user": False, "text": event["text"]})
             if "code" in event:
                 message["6"] = {"type": "cstring", "value": event["code"]}
             send_app_message(self.appmessage, self.target, message)
+
+    @staticmethod
+    def _chunks(text, limit=700):
+        result = []
+        remaining = text
+        while remaining:
+            end = len(remaining)
+            while end > 0 and len(remaining[:end].encode("utf-8")) > limit:
+                end -= 1
+            result.append(remaining[:end])
+            remaining = remaining[end:]
+        return result or [""]
+
+    def _send_history(self, request_id, agent_id):
+        messages = self.history.get(agent_id, [])[-16:]
+        for sequence, item in enumerate(messages, 1):
+            chunks = self._chunks(item["text"][:5600])
+            for index, chunk in enumerate(chunks):
+                send_app_message(self.appmessage, self.target, {
+                    "0": {"type": "uint8", "value": 17},
+                    "1": {"type": "cstring", "value": request_id},
+                    "3": {"type": "cstring", "value": chunk},
+                    "7": {"type": "uint16", "value": index},
+                    "8": {"type": "uint16", "value": len(chunks)},
+                    "9": {"type": "uint8", "value": 1},
+                    "10": {"type": "uint16", "value": sequence},
+                    "11": {"type": "uint8", "value": 8 if item["user"] else 0},
+                })
+        send_app_message(self.appmessage, self.target, {
+            "0": {"type": "uint8", "value": 18},
+            "1": {"type": "cstring", "value": request_id},
+            "9": {"type": "uint8", "value": 1},
+            "10": {"type": "uint16", "value": len(messages)},
+        })
 
 
 def main():
