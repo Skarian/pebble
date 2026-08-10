@@ -52,13 +52,15 @@ Individual upstream HTTP requests time out after 12 seconds.
 
 ### Connection diagnostics
 
-The phone retains thirty-two sanitized AppMessage/domain events, plus safe
-ResMed step/status/timing metadata, in PebbleKit JS storage. It excludes
+The phone retains the newest thirty-two sanitized AppMessage/domain fault
+incidents, including failed attempts that later recover, plus safe ResMed
+step/status/timing metadata. Routine lifecycle and success events are live-only.
+The persistent ring excludes
 credentials, payload values, and response bodies. Use **Copy diagnostics** under
 **Connection diagnostics** in
 CPAP Settings or the centralized commands in
 [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).
-Opening Settings also replays the saved ring to phone logs with the stable
+Opening Settings also replays the saved incident ring to phone logs with the stable
 `CPAP_APPMESSAGE` prefix.
 
 The `replay` field identifies the exact simulated failure to construct in the

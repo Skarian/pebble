@@ -24,7 +24,7 @@ internal interface LogStorage {
     fun write(value: String)
 }
 
-/** A bounded, payload-free trail for AppMessage failures and recovery. */
+/** A bounded, payload-free trail of AppMessage fault incidents. */
 internal class AppMessageLog(
     private val app: String,
     private val storage: LogStorage,
@@ -41,25 +41,40 @@ internal class AppMessageLog(
 
     init {
         require(limit > 0)
+        runCatching {
+            synchronized(LOCK) {
+                val stored = readUnsafe()
+                val incidents = stored.filter(::isIncident).takeLast(limit)
+                if (stored != incidents) writeUnsafe(incidents)
+            }
+        }
     }
 
     fun record(entry: LogEntry) {
+        val safe = sanitize(entry.copy(at = entry.at.takeIf { it > 0 } ?: now()))
+        runCatching { output(oneLine(safe)) }
+        if (!isIncident(safe)) return
         runCatching {
             synchronized(LOCK) {
-                val safe = sanitize(entry.copy(at = entry.at.takeIf { it > 0 } ?: now()))
-                storage.write((readUnsafe() + safe).takeLast(limit).joinToString("\n", transform = ::encode))
-                output(oneLine(safe))
+                writeUnsafe((readUnsafe().filter(::isIncident) + safe).takeLast(limit))
             }
         }
     }
 
     fun export(): String = runCatching {
-        synchronized(LOCK) { json(readUnsafe()) }
+        synchronized(LOCK) { json(readUnsafe().filter(::isIncident).takeLast(limit)) }
     }.getOrElse { json(emptyList()) }
 
     fun replay() {
-        runCatching { synchronized(LOCK) { readUnsafe().forEach { output(oneLine(it)) } } }
+        runCatching {
+            synchronized(LOCK) {
+                readUnsafe().filter(::isIncident).takeLast(limit).forEach { output(oneLine(it)) }
+            }
+        }
     }
+
+    private fun writeUnsafe(entries: List<LogEntry>) =
+        storage.write(entries.joinToString("\n", transform = ::encode))
 
     private fun readUnsafe() = storage.read().lineSequence()
         .filter(String::isNotBlank)
@@ -77,6 +92,13 @@ internal class AppMessageLog(
         detail = token(value.detail),
         category = token(value.category),
     )
+
+    private fun isIncident(value: LogEntry) = when (value.event) {
+        "delivery_retry", "delivery_failure", "request_conflict", "request_busy",
+        "domain_failure" -> true
+        "domain_terminal" -> value.category != "ok"
+        else -> false
+    }
 
     private fun request(value: String): String {
         if (value.isBlank() || NUMERIC_REQUEST.matches(value)) return value

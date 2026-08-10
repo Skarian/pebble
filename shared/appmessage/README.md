@@ -20,7 +20,8 @@ The three runtime entry points are:
 - Reads are single-flight and may replay a completed result.
 - A delivered mutation reconciles its original ID instead of submitting again.
 - Phone sends and multipart batches are serialized and stop at the failed part.
-- Logs contain only bounded transport metadata and allowlisted domain categories.
+- Persistent logs retain only bounded, payload-free fault incidents; routine
+  lifecycle and success events remain live-only.
 
 The watch implementation reserves AppMessage key `127` for its private outbox
 attempt token. Do not declare or write that key in an app protocol. The token is
@@ -120,4 +121,4 @@ messages.open();
 ```
 
 See [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md)
-for the persistent redacted trail and retrieval commands.
+for the persistent incident ring and retrieval commands.

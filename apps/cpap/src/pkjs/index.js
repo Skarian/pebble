@@ -52,7 +52,7 @@ function statusMessage(status, text) {
 
 function logResMedError(context, requestId, error) {
   error = error || {};
-  var entry = appMessages.record({
+  appMessages.record({
     operation: context,
     requestId: requestId,
     event: 'domain_terminal',
@@ -68,7 +68,6 @@ function logResMedError(context, requestId, error) {
     replay: error.replay,
     shape: error.shape
   });
-  console.log('CPAP_APPMESSAGE ' + JSON.stringify(entry));
 }
 
 function recordsMessage(records) {
@@ -169,7 +168,7 @@ function settingsPage(settings, diagnosticReport) {
     ' autocomplete="current-password">' +
     '<p class="note">The Pebble mobile runtime has no keychain. Your password is stored in this app’s private local storage. After saving, return to CPAP and press Select.</p>' +
     '<button type="submit">Save</button></form>' +
-    '<h2>Connection diagnostics</h2><p class="note">Saved events contain no password, ResMed token, response body, or sleep record. Copy this report for debugging.</p>' +
+    '<h2>Connection diagnostics</h2><p class="note">Saved errors contain no password, ResMed token, response body, or sleep record. Copy this report for debugging.</p>' +
     '<textarea id="diagnostics" readonly>' + escapeHtml(diagnosticReport) + '</textarea>' +
     '<button type="button" id="copy">Copy diagnostics</button><a class="cancel" href="pebblejs://close">Cancel</a>' +
     '<script>document.getElementById("copy").onclick=function(){var d=document.getElementById("diagnostics");d.select();document.execCommand("copy");this.textContent="Copied";};' +

@@ -191,7 +191,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateUi() {
-        diagnosticsStatus.text = "Stored locally without sensor readings or addresses."
+        diagnosticsStatus.text = "Recent connection errors are stored without sensor readings or addresses."
         val address = settings.sensorAddress
         sensorStatus.text = if (address.isNullOrBlank()) "No sensor selected" else settings.sensorName ?: "Aranet4"
         if (address.isNullOrBlank()) {

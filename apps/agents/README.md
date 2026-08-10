@@ -58,7 +58,8 @@ The production artifact is `build/agents.pbw`.
 
 ## Connection diagnostics
 
-The watch emits payload-free AppMessage logs; the Android companion keeps a
-bounded durable trail and exposes **Copy connection diagnostics**. Retrieval
+The watch emits payload-free AppMessage logs; the Android companion keeps the
+newest 64 fault incidents (not routine successes) and exposes **Copy connection
+diagnostics**. Retrieval
 commands and the redaction contract are in
 [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).

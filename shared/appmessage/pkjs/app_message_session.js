@@ -98,16 +98,31 @@ function createAppMessageSession(options) {
   function loadEvents() {
     try {
       var saved = storage ? JSON.parse(storage.getItem(storageKey) || '[]') : [];
-      return Array.isArray(saved) ? saved.slice(0, 32).map(sanitize) : [];
+      var incidents = Array.isArray(saved) ? saved.map(sanitize)
+        .filter(isIncident).slice(0, 32) : [];
+      if (storage && JSON.stringify(saved) !== JSON.stringify(incidents)) {
+        storage.setItem(storageKey, JSON.stringify(incidents));
+      }
+      return incidents;
     } catch (ignored) { return []; }
+  }
+
+  function isIncident(entry) {
+    if (entry.event === 'domain_terminal') return entry.finalCategory !== 'ok';
+    return entry.event === 'delivery_retry' || entry.event === 'delivery_failure' ||
+      entry.event === 'domain_failure' || entry.event === 'read_invalid' ||
+      entry.event === 'read_conflict' || entry.event === 'read_busy';
   }
 
   function record(entry) {
     var safe = sanitize(entry);
-    events.unshift(safe);
-    events = events.slice(0, 32);
-    try { if (storage) storage.setItem(storageKey, JSON.stringify(events)); }
-    catch (ignored) {}
+    output(logPrefix + ' ' + JSON.stringify(safe));
+    if (isIncident(safe)) {
+      events.unshift(safe);
+      events = events.slice(0, 32);
+      try { if (storage) storage.setItem(storageKey, JSON.stringify(events)); }
+      catch (ignored) {}
+    }
     return safe;
   }
 

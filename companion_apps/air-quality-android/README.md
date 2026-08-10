@@ -12,9 +12,10 @@ parallel Bluetooth scan. Missing chart history is repaired only after the
 interactive response, or by the daily sync.
 
 The setup screen shows the age of the last successful automatic sync. A bounded
-local AppMessage log records lifecycle, request, retry, delivery-result, and
-domain-error categories. It never records sensor addresses, measurements,
-names, credentials, or other message payloads.
+local AppMessage log retains only fault incidents, including failed attempts
+that later recover. Routine lifecycle, request, and success events are
+live-only. It never records sensor addresses, measurements, names, credentials,
+or other message payloads.
 
 <img src="screenshots/air-quality-companion.png" width="270" alt="AirQuality Companion setup screen">
 
@@ -39,6 +40,7 @@ that should appear on the watch.
 
 ## Connection diagnostics
 
-Open AirQuality and tap **Copy connection diagnostics** for the bounded redacted report.
+Open AirQuality and tap **Copy connection diagnostics** for the newest 64
+payload-free fault incidents.
 Exact UI, logcat, and debug-APK retrieval steps are centralized in
 [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).

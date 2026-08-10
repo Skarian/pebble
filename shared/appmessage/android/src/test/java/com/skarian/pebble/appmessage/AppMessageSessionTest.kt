@@ -276,30 +276,46 @@ class AppMessageSessionTest {
     }
 
     @Test
-    fun `log is bounded and redacts request and failure content`() {
-        var encoded = ""
+    fun `log keeps only bounded redacted incidents while routine events remain live`() {
+        var encoded = listOf(
+            "100\tready\tsession\tdelivery_success\tactive\t1\t1\t0\tsuccess\t\tok",
+            "101\tsend\t17\tdelivery_failure\tactive\t1\t1\t0\tunknown\t\tdelivery",
+        ).joinToString("\n")
+        val live = mutableListOf<String>()
         val log = AppMessageLog(
             app = "agents",
             storage = object : LogStorage {
                 override fun read() = encoded
                 override fun write(value: String) { encoded = value }
             },
-            limit = 3,
+            limit = 2,
             now = { 123L },
+            output = live::add,
         )
 
         log.record(LogEntry(operation = "send", requestId = "dictation secret@example.com", event = "request"))
-        log.record(LogEntry(operation = "send", requestId = "17", event = "delivery_failure", result = "unknown", detail = "bad value with token"))
-        log.record(LogEntry(operation = "send", requestId = "another private id", event = "recovery"))
+        log.record(LogEntry(
+            operation = "send", requestId = "dictation secret@example.com",
+            event = "delivery_retry", result = "unknown", detail = "bad value with token",
+            category = "pending",
+        ))
+        log.record(LogEntry(
+            operation = "refresh", requestId = "18", event = "domain_failure",
+            category = "service",
+        ))
 
         val report = log.export()
         assertFalse(report.contains("secret@example.com"))
         assertFalse(report.contains("dictation secret"))
         assertFalse(report.contains("bad value with token"))
-        assertFalse(report.contains("another private id"))
         assertTrue(report.contains("hash:"))
-        assertTrue(report.contains("\"requestRef\":\"17\""))
-        assertEquals(3, report.split("\"at\":").size - 1)
+        assertFalse(report.contains("delivery_success"))
+        assertFalse(report.contains("\"event\":\"request\""))
+        assertTrue(report.contains("delivery_retry"))
+        assertTrue(report.contains("domain_failure"))
+        assertEquals(2, report.split("\"at\":").size - 1)
+        assertTrue(live.any { it.contains("event=request ") })
+        assertFalse(encoded.contains("delivery_success"))
     }
 
     private fun session(

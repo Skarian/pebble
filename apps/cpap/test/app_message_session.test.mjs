@@ -94,9 +94,10 @@ test('immediate and asynchronous failures retry the unchanged dictionary', () =>
   assert.deepEqual(seen, [message, message, message]);
   assert.deepEqual(outcome, {ok: true, attempts: 3,
     resultClass: 'ack', resultCode: ''});
-  const success = JSON.parse(appMessages.report()).events
-    .find((entry) => entry.event === 'delivery_success');
-  assert.equal(success.part, 0);
+  const incidents = JSON.parse(appMessages.report()).events;
+  assert.equal(incidents.filter((entry) => entry.event === 'delivery_retry').length, 2);
+  assert.equal(incidents.some((entry) => entry.event === 'delivery_success'), false);
+  assert.ok(incidents.every((entry) => entry.part === 0));
   assert.doesNotMatch(appMessages.report(), /private detail|payload|secret/);
 });
 
@@ -249,21 +250,29 @@ test('one read coalesces, fans out IDs, rejects conflicts, and replays exact IDs
     {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 10},
   ]);
   const eventNames = JSON.parse(appMessages.report()).events.map((entry) => entry.event);
-  assert.ok(eventNames.includes('read_coalesced'));
-  assert.ok(eventNames.includes('read_joined'));
   assert.ok(eventNames.includes('read_conflict'));
-  assert.ok(eventNames.includes('response_replayed'));
+  assert.equal(eventNames.includes('read_coalesced'), false);
+  assert.equal(eventNames.includes('read_joined'), false);
+  assert.equal(eventNames.includes('response_replayed'), false);
 });
 
-test('domain fallback and the bounded persistent export reveal no sensitive values', () => {
+test('only bounded fault incidents survive restart and reveal no sensitive values', () => {
   const storage = memoryStorage();
+  storage.setItem('pebble.appmessage.cpap.v1', JSON.stringify([
+    {operation: 'ready', event: 'lifecycle_ready', finalCategory: ''},
+    {operation: 'fetch', requestId: 7, event: 'delivery_failure',
+      resultClass: 'callback_failure', finalCategory: 'delivery'},
+    {operation: 'fetch', requestId: 7, event: 'delivery_success', finalCategory: 'ok'},
+  ]));
   const replies = [];
   const first = session((message, ok) => { replies.push(message); ok(); },
     {storage, now: () => 123});
 
   for (let index = 0; index < 35; index += 1) {
-    first.record({operation: 'probe', event: 'probe', status: index});
+    first.record({operation: 'probe', event: 'domain_failure', requestId: index + 1,
+      status: index, finalCategory: 'probe_failure'});
   }
+  first.record({operation: 'probe', event: 'probe_succeeded', finalCategory: 'ok'});
   first.record({operation: 'refresh', event: 'domain_terminal', requestId: 'request-1',
     step: 'sleep records', status: 503, resultCode: 'HTTP_503',
     finalCategory: 'resmed_service', password: 'secret', responseBody: 'private'});
@@ -284,5 +293,6 @@ test('domain fallback and the bounded persistent export reveal no sensitive valu
   assert.equal(JSON.parse(report).events.length, 32);
   assert.match(report, /phone_runtime|request-2/);
   assert.match(logged[0], /^CPAP_APPMESSAGE /);
+  assert.doesNotMatch(report, /lifecycle_ready|delivery_success|probe_succeeded/);
   assert.doesNotMatch(report, /secret|private|password|responseBody|token must stay private/);
 });
