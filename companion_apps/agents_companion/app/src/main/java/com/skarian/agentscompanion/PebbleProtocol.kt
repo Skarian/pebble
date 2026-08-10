@@ -5,7 +5,7 @@ import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 enum class WatchCommand(val wireValue: UByte) { REFRESH_AGENTS(1u), SEND(2u), RECONCILE(3u), HISTORY(4u) }
 enum class PhoneEvent(val wireValue: UByte) {
     AGENTS(10u), ACCEPTED(11u), COMMENTARY(12u), COMPLETED(13u), FAILED(14u),
-    STATUS_UNKNOWN(15u), AGENTS_FAILED(16u), HISTORY_ITEM(17u), HISTORY_END(18u),
+    STATUS_UNKNOWN(15u), AGENTS_FAILED(16u), HISTORY_ITEM(17u), HISTORY_END(18u), READY(19u),
 }
 
 data class WatchRequest(
@@ -89,6 +89,11 @@ object PebbleProtocol {
             }
         }
     }
+
+    fun ready() = mapOf<UInt, PebbleDictionaryItem>(
+        KEY_PROTOCOL to PebbleDictionaryItem.UInt8(VERSION.toUByte()),
+        KEY_KIND to PebbleDictionaryItem.UInt8(PhoneEvent.READY.wireValue),
+    )
 
     fun event(kind: PhoneEvent, requestId: String, text: String = "", code: String? = null,
               chunkIndex: Int = 0, chunkCount: Int = 1, sequence: Int = 0, flags: Int = 0) = buildMap<UInt, PebbleDictionaryItem> {

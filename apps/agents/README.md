@@ -3,7 +3,8 @@
 Agents is a voice-first Pebble app for sending a turn to a configured
 `codex-router` agent. The watch app is deliberately thin: the Android
 companion owns Termux discovery and routing, while the watch owns selection,
-native dictation, streaming display, and short turn history.
+native dictation, streaming display, and a bounded view of companion-owned
+message history.
 
 ## Interaction model
 
@@ -19,10 +20,20 @@ native dictation, streaming display, and short turn history.
   closes a completed turn.
 
 The watch persists its active request, agent, phase, event sequence, and
-request counter. Relaunching reconciles the stored request with the companion;
-it never resends the transcript. A 30-second admission timer and 60-second
-stream watchdog recover through the same reconcile command. Responses use at
-most eight ordered chunks and show a visible truncation marker when the full
+request counter. Launch refreshes and stored-turn recovery wait briefly for the
+companion's repeatable READY event, then fall back so a lost READY cannot stall
+the app. The shared AppMessage client serializes work, checks both the
+immediate send result and the asynchronous outbox callback, and retries with
+the original request ID. A read timeout may repeat the same read. An
+acknowledged SEND timeout reconciles that same turn ID and never resends the
+transcript or creates a second logical turn.
+
+The 60-second working watchdog also reconciles the stored turn when agent
+updates stop. A missing history chunk causes a bounded whole-history replay
+under the same history request ID; already accepted messages and duplicate
+chunks are ignored safely. Holding Select opens Messages from final/running
+screens and from turn-related delivery or agent error screens. Responses use
+at most eight ordered chunks and show a visible truncation marker when the full
 phone-side result exceeds the watch projection.
 
 The watchapp UUID is `bba3f38f-53e5-458b-9d5f-0bcdb68ffd47`. Its only Android
@@ -44,3 +55,10 @@ screenshots, a contact sheet, and a scenario manifest under `qa-results/`.
 Fixtures live only in the QA driver and are never compiled into the PBW.
 
 The production artifact is `build/agents.pbw`.
+
+## Connection diagnostics
+
+The watch emits payload-free AppMessage logs; the Android companion keeps a
+bounded durable trail and exposes **Copy connection diagnostics**. Retrieval
+commands and the redaction contract are in
+[`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).

@@ -2,6 +2,8 @@ package com.skarian.agentscompanion
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -68,8 +70,17 @@ class MainActivity : ComponentActivity() {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        refreshAgents.setOnClickListener { startCommand("Refreshing agents…", runner::refreshAgents) }
+        refreshAgents.setOnClickListener { startCommand("Refreshing agents…") { runner.refreshAgents() } }
         runDoctor.setOnClickListener { startCommand("Checking router setup…", runner::doctor) }
+        findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener {
+            val diagnostics = AgentsAppMessage.appMessageSession(this)
+            diagnostics.replayLogcat()
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newPlainText("Agents connection diagnostics", diagnostics.exportLog()),
+            )
+            latestStatus.text = "Diagnostics copied."
+        }
+        AgentsAppMessage.appMessageSession(this).replayLogcat()
         render()
     }
 

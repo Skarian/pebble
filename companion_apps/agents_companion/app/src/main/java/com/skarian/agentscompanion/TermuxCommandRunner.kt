@@ -6,15 +6,20 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import com.termux.shared.termux.TermuxConstants
+import java.net.URLEncoder
 import java.util.UUID
 
 class TermuxCommandRunner(private val context: Context) {
-    fun refreshAgents(requestId: String = UUID.randomUUID().toString()): String = execute(
+    fun refreshAgents(
+        requestId: String = UUID.randomUUID().toString(),
+        watchId: String? = null,
+    ): String = execute(
         kind = KIND_AGENTS,
         arguments = arrayOf("agents", "list", "--json"),
         stdin = null,
         mode = null,
         requestId = requestId,
+        watchId = watchId,
     )
 
     fun doctor(): String = execute(
@@ -68,17 +73,19 @@ class TermuxCommandRunner(private val context: Context) {
         mode: ExecutionMode?,
         requestId: String = UUID.randomUUID().toString(),
         streamCallback: StreamCallback? = null,
+        watchId: String? = null,
     ): String {
         val callback = Intent(context, TermuxResultReceiver::class.java)
-            .setData(Uri.parse(callbackIdentity(kind, requestId)))
+            .setData(Uri.parse(callbackIdentity(kind, requestId, watchId)))
             .putExtra(EXTRA_REQUEST_ID, requestId)
             .putExtra(EXTRA_KIND, kind)
             .putExtra(EXTRA_MODE, mode?.name)
+            .apply { watchId?.let { putExtra(EXTRA_WATCH_ID, it) } }
         val flags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_UPDATE_CURRENT or
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         val pendingIntent = PendingIntent.getBroadcast(
             context,
-            requestId.hashCode(),
+            "$requestId\u0000${watchId.orEmpty()}".hashCode(),
             callback,
             flags,
         )
@@ -126,6 +133,7 @@ class TermuxCommandRunner(private val context: Context) {
         const val EXTRA_REQUEST_ID = "request_id"
         const val EXTRA_KIND = "kind"
         const val EXTRA_MODE = "mode"
+        const val EXTRA_WATCH_ID = "watch_id"
         const val KIND_AGENTS = "agents"
         const val KIND_SEND = "send"
         const val KIND_DOCTOR = "doctor"
@@ -134,7 +142,9 @@ class TermuxCommandRunner(private val context: Context) {
         private const val SHELL_NAME = "agents-companion"
         private const val ROUTER_COMMAND = "exec codex-router \"\$@\""
         private const val STREAM_COMMAND = "exec node -e \"\$1\" \"\${@:2}\""
-        internal fun callbackIdentity(kind: String, requestId: String) = "agents://termux-result/$kind/$requestId"
+        internal fun callbackIdentity(kind: String, requestId: String, watchId: String? = null) =
+            "agents://termux-result/$kind/$requestId" +
+                (watchId?.let { "?watch=" + URLEncoder.encode(it, "UTF-8") } ?: "")
         private val NODE_STREAM_BRIDGE = """
             const net = require("net");
             const fs = require("fs");

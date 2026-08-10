@@ -13,7 +13,7 @@ data class StoredTurn(
     val code: String = "", val ambiguous: Boolean = false, val sequence: Int = 0,
     val updatedAt: Long = System.currentTimeMillis(),
 )
-enum class TurnClaim { CLAIMED, DUPLICATE, BUSY }
+enum class TurnClaim { CLAIMED, DUPLICATE, CONFLICT, BUSY }
 data class DoctorStatus(val ok: Boolean, val summary: String)
 data class CachedMessage(
     val id: String,
@@ -53,6 +53,22 @@ internal fun normalizeTurnUpdate(current: StoredTurn, transformed: StoredTurn, n
     }
 }
 
+internal fun classifyTurnClaim(existing: StoredTurn?, requested: StoredTurn, now: Long): TurnClaim {
+    if (existing?.requestId == requested.requestId) {
+        return if (existing.agentId == requested.agentId &&
+            existing.transcriptHash == requested.transcriptHash
+        ) TurnClaim.DUPLICATE else TurnClaim.CONFLICT
+    }
+    val stale = existing != null && when (existing.state) {
+        TurnState.QUEUED -> now - existing.updatedAt > 15_000L
+        TurnState.RUNNING -> now - existing.updatedAt > 45_000L
+        TurnState.TERMINAL -> true
+    }
+    return if (existing != null && existing.state != TurnState.TERMINAL && !stale) {
+        TurnClaim.BUSY
+    } else TurnClaim.CLAIMED
+}
+
 class CompanionState(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     fun saveAgents(agents: List<AgentSummary>) { preferences.edit().putString(KEY_AGENTS, RouterProtocol.agentsToJson(agents)).putLong(KEY_AGENTS_UPDATED_AT, System.currentTimeMillis()).apply() }
@@ -81,15 +97,11 @@ class CompanionState(context: Context) {
 
     fun claimTurn(turn: StoredTurn): TurnClaim = synchronized(TURN_LOCK) {
         val existing = loadTurn()
-        if (existing?.requestId == turn.requestId) return@synchronized TurnClaim.DUPLICATE
         val now = System.currentTimeMillis()
-        val stale = existing != null && when (existing.state) {
-            TurnState.QUEUED -> now - existing.updatedAt > QUEUE_LEASE_TIMEOUT_MS
-            TurnState.RUNNING -> now - existing.updatedAt > RUNNING_LEASE_TIMEOUT_MS
-            TurnState.TERMINAL -> true
+        when (val claim = classifyTurnClaim(existing, turn, now)) {
+            TurnClaim.CLAIMED -> if (saveTurn(turn)) TurnClaim.CLAIMED else TurnClaim.BUSY
+            else -> claim
         }
-        if (existing != null && existing.state != TurnState.TERMINAL && !stale) return@synchronized TurnClaim.BUSY
-        if (saveTurn(turn)) TurnClaim.CLAIMED else TurnClaim.BUSY
     }
     private fun saveTurn(turn: StoredTurn): Boolean = preferences.edit().putString(KEY_TURN, turnJson(turn).toString()).commit()
     fun loadTurn(): StoredTurn? = preferences.getString(KEY_TURN, null)?.let { raw -> runCatching { parseTurn(JSONObject(raw)) }.getOrNull() }
@@ -119,5 +131,5 @@ class CompanionState(context: Context) {
     private fun historyJson(messages: List<CachedMessage>) = JSONArray().apply {
         messages.forEach { put(JSONObject().put("id",it.id).put("agentId",it.agentId).put("requestId",it.requestId).put("sequence",it.sequence).put("user",it.user).put("text",it.text).put("createdAt",it.createdAt)) }
     }
-    companion object { private val TURN_LOCK = Any(); private val HISTORY_LOCK = Any(); private const val MAX_HISTORY_PER_AGENT=20; private const val QUEUE_LEASE_TIMEOUT_MS=15_000L; private const val RUNNING_LEASE_TIMEOUT_MS=45_000L; private const val PREFERENCES="agents_companion"; private const val KEY_AGENTS="agents"; private const val KEY_AGENTS_UPDATED_AT="agents_updated_at"; private const val KEY_DOCTOR_OK="doctor_ok"; private const val KEY_DOCTOR_SUMMARY="doctor_summary"; private const val KEY_DOCTOR_UPDATED_AT="doctor_updated_at"; private const val KEY_PEBBLE_UUID="pebble_uuid"; private const val KEY_PEBBLE_WATCH="pebble_watch"; private const val KEY_PEBBLE_OPENED_AT="pebble_opened_at"; private const val KEY_BRIDGE_ERROR="bridge_error"; private const val KEY_TURN="active_turn_v2"; private const val KEY_HISTORY="agent_history_v1" }
+    companion object { private val TURN_LOCK = Any(); private val HISTORY_LOCK = Any(); private const val MAX_HISTORY_PER_AGENT=20; private const val PREFERENCES="agents_companion"; private const val KEY_AGENTS="agents"; private const val KEY_AGENTS_UPDATED_AT="agents_updated_at"; private const val KEY_DOCTOR_OK="doctor_ok"; private const val KEY_DOCTOR_SUMMARY="doctor_summary"; private const val KEY_DOCTOR_UPDATED_AT="doctor_updated_at"; private const val KEY_PEBBLE_UUID="pebble_uuid"; private const val KEY_PEBBLE_WATCH="pebble_watch"; private const val KEY_PEBBLE_OPENED_AT="pebble_opened_at"; private const val KEY_BRIDGE_ERROR="bridge_error"; private const val KEY_TURN="active_turn_v2"; private const val KEY_HISTORY="agent_history_v1" }
 }

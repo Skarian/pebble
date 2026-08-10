@@ -112,6 +112,11 @@
             style="@style/StatusCard"
             android:minHeight="80dp" />
 
+        <Button
+            android:id="@+id/copyDiagnosticsButton"
+            style="@style/ActionButton"
+            android:text="Copy connection diagnostics" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

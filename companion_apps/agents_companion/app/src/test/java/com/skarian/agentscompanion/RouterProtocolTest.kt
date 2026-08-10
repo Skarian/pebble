@@ -25,6 +25,8 @@ class RouterProtocolTest {
             TermuxCommandRunner.callbackIdentity("send", "new-request"))
         assertTrue(TermuxCommandRunner.callbackIdentity("agents", "same-request") !=
             TermuxCommandRunner.callbackIdentity("send", "same-request"))
+        assertTrue(TermuxCommandRunner.callbackIdentity("agents", "same-request", "watch-a") !=
+            TermuxCommandRunner.callbackIdentity("agents", "same-request", "watch-b"))
     }
 
     @Test
@@ -164,6 +166,32 @@ class RouterProtocolTest {
     }
 
     @Test
+    fun `duplicate request id must match agent and transcript identity`() {
+        val session = PebbleSession(java.util.UUID.randomUUID(), "watch")
+        val stored = StoredTurn("same-id", "home", "hash-a", TurnState.RUNNING, session)
+        assertEquals(
+            TurnClaim.DUPLICATE,
+            classifyTurnClaim(stored, stored.copy(session = session.copy(watchId = "rebound")), stored.updatedAt),
+        )
+        assertEquals(
+            TurnClaim.CONFLICT,
+            classifyTurnClaim(stored, stored.copy(agentId = "other"), stored.updatedAt),
+        )
+        assertEquals(
+            TurnClaim.CONFLICT,
+            classifyTurnClaim(stored, stored.copy(transcriptHash = "hash-b"), stored.updatedAt),
+        )
+    }
+
+    @Test
+    fun `heartbeat touch advances the running turn timestamp`() {
+        val session = PebbleSession(java.util.UUID.randomUUID(), "watch")
+        val running = StoredTurn("r", "home", "hash", TurnState.RUNNING, session, updatedAt = 10)
+        val normalized = normalizeTurnUpdate(running, running.copy(updatedAt = 11), 500)
+        assertEquals(500, normalized.updatedAt)
+    }
+
+    @Test
     fun `authoritative correction advances beyond provisional unknown`() {
         val session = PebbleSession(java.util.UUID.randomUUID(), "watch")
         val unknown = StoredTurn("r", "home", "hash", TurnState.TERMINAL, session,
@@ -172,6 +200,28 @@ class RouterProtocolTest {
         val normalized = normalizeTurnUpdate(unknown, completed, 100)
         assertEquals(3, normalized.sequence)
         assertEquals("completed", normalized.eventType)
+    }
+
+    @Test
+    fun `terminal domain categories are categorical and redact router payloads`() {
+        assertEquals("ok", routerTerminalCategory(PhoneEvent.COMPLETED))
+        assertEquals("status_unknown", routerTerminalCategory(PhoneEvent.STATUS_UNKNOWN))
+        assertEquals("agent_failed", routerTerminalCategory(PhoneEvent.FAILED))
+        assertEquals(null, routerTerminalCategory(PhoneEvent.COMMENTARY))
+
+        fun stored(stdout: String, exitCode: Int = 0) = StoredResult(
+            "refresh-3", TermuxCommandRunner.KIND_AGENTS, null, stdout,
+            "private stderr", exitCode, 0, "private error",
+        )
+        val valid = parseAgentRefresh(stored("""[{"id":"home","label":"Home"}]"""))
+        val invalid = parseAgentRefresh(stored("secret@example.com is not JSON"))
+        val failed = parseAgentRefresh(stored("private stdout", exitCode = 7))
+        assertEquals(listOf("ok", "invalid_agents", "refresh_failed"),
+            listOf(valid.category, invalid.category, failed.category))
+        assertEquals("invalid_agents", invalid.category)
+        assertEquals(null, invalid.agents)
+        assertFalse(invalid.toString().contains("secret@example.com"))
+        assertTrue(invalid.category.matches(Regex("[a-z_]+")))
     }
 
     @Test(expected = IllegalArgumentException::class)

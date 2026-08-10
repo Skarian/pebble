@@ -79,7 +79,30 @@ class RouterRunService : Service() {
         catch (error: Exception) { failRun(requestId,"Live stream failed: ${error.message}","stream_lost", ambiguous=true) }
     }
 
-    private fun deliver(turn: StoredTurn) { runCatching { runBlocking { val kind=when { turn.ambiguous->PhoneEvent.STATUS_UNKNOWN; turn.eventType=="completed"->PhoneEvent.COMPLETED; turn.eventType=="failed"->PhoneEvent.FAILED; turn.eventType=="accepted"->PhoneEvent.ACCEPTED; else->PhoneEvent.COMMENTARY }; PebbleTransport(this@RouterRunService).sendTextEvent(turn.session,kind,turn.requestId,turn.text,turn.code,turn.sequence,turn.ambiguous) } }.onFailure { CompanionState(this).saveBridgeError("Could not send turn update: ${it.message}") } }
+    private fun deliver(turn: StoredTurn) {
+        runCatching {
+            runBlocking {
+                val kind = when {
+                    turn.ambiguous -> PhoneEvent.STATUS_UNKNOWN
+                    turn.eventType == "completed" -> PhoneEvent.COMPLETED
+                    turn.eventType == "failed" -> PhoneEvent.FAILED
+                    turn.eventType == "accepted" -> PhoneEvent.ACCEPTED
+                    else -> PhoneEvent.COMMENTARY
+                }
+                val outcome = AgentsAppMessage(this@RouterRunService).sendTextEvent(
+                    turn.session, kind, turn.requestId, turn.text, turn.code,
+                    turn.sequence, turn.ambiguous,
+                )
+                if (!outcome.delivered) {
+                    CompanionState(this@RouterRunService).saveBridgeError(
+                        "Could not send turn update (${outcome.failure}).",
+                    )
+                }
+            }
+        }.onFailure {
+            CompanionState(this).saveBridgeError("Could not send turn update.")
+        }
+    }
     private fun failRun(requestId:String,message:String,code:String,ambiguous:Boolean=false) { val turn=CompanionState(this).updateTurn(requestId){it.copy(state=TurnState.TERMINAL,eventType="failed",text=message,code=code,ambiguous=ambiguous,sequence=(it.sequence+1).coerceAtMost(65535))}; turn?.let(::deliver); stopSelf() }
     private fun notifyText(text:String) { if(Build.VERSION.SDK_INT<33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED) getSystemService(NotificationManager::class.java).notify(CompanionNotifications.ACTIVE_NOTIFICATION_ID,CompanionNotifications.active(this,text)) }
 

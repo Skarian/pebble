@@ -51,6 +51,7 @@ configurations.configureEach {
 }
 
 dependencies {
+    implementation(project(":pebble-appmessage"))
     implementation("androidx.activity:activity-ktx:1.12.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("com.github.termux.termux-app:termux-shared:0.118.1")
