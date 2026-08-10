@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
@@ -248,6 +249,7 @@ def main():
     else:
         version = sdk_manager.get_current_sdk()
         launcher = ManagedEmulatorTransport(args.emulator, version, vnc_enabled=False)
+        atexit.register(stop_owned_qemu, launcher)
         # Current Emery firmware may not emit the SDK console marker. Older
         # platforms do, and need that event before the direct Pebble handshake.
         if args.emulator == "emery":
@@ -325,11 +327,7 @@ def main():
                   launcher.qemu_pid if launcher else None, voice, bridge)
         finally:
             close_transport(transport)
-            if launcher and launcher.qemu_pid:
-                try:
-                    os.kill(launcher.qemu_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            stop_owned_qemu(launcher)
         return
 
     running = capture(connection, transport, expected, args.timeout, args.button, args.output)
@@ -353,6 +351,22 @@ def main():
     print("PEBBLE_SCREENSHOT_RUNNING_UUID={}".format(running), flush=True)
 
     close_transport(transport)
+
+
+def stop_owned_qemu(launcher):
+    """Stop only the QEMU process spawned by this capture helper, then reap it."""
+    if not launcher or not launcher.qemu_pid:
+        return
+    pid = launcher.qemu_pid
+    launcher.qemu_pid = None
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
 
 
 def capture(connection, transport, expected, timeout, buttons, output,
