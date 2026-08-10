@@ -92,7 +92,11 @@ function errorForResponse(response, step) {
   var body = parseJson(response.text) || {};
   var auth = response.status === 401 || response.status === 403 ||
     body.errorCode === 'E0000004';
-  var transient = response.status === 502 || response.status === 503 || response.status === 504;
+  var oneTimeCodeRejected = step === 'token exchange' && response.status === 400 &&
+    body.error === 'invalid_grant';
+  var code = oneTimeCodeRejected ? 'invalid_grant' : responseCode(body);
+  var transient = response.status === 502 || response.status === 503 ||
+    response.status === 504 || oneTimeCodeRejected;
   return {
     type: auth ? 'auth' : 'service',
     message: auth ? 'ResMed sign-in failed' : 'ResMed unavailable',
@@ -100,7 +104,7 @@ function errorForResponse(response, step) {
     step: step,
     status: response.status,
     elapsedMs: response.elapsedMs || 0,
-    code: responseCode(body),
+    code: code,
     replay: 'http:' + step.replace(/ /g, '-') + ':' + response.status +
       (body.errorCode === 'E0000004' ? ':invalid-credentials' : ''),
     shape: responseShape(response.text)

@@ -149,6 +149,26 @@ test('one transient network failure retries the whole operation once', async () 
   assert.equal(requests.length, 5);
 });
 
+test('rejected one-time authorization code restarts the full flow once', async () => {
+  const requests = [];
+  let delays = 0;
+  const Xhr = fakeXhr([
+    ...successFlow([]).slice(0, 2),
+    complete(400, JSON.stringify({
+      error: 'invalid_grant', error_description: 'private upstream detail'
+    })),
+    ...successFlow([])
+  ], requests);
+  const client = createClient(Xhr, memoryStorage(), {
+    requestTimeoutMs: 0,
+    retryDelay: (callback) => { delays += 1; callback(); }
+  });
+  const result = await fetchRecords(client);
+  assert.equal(result.error, null);
+  assert.equal(delays, 1);
+  assert.equal(requests.length, 7);
+});
+
 test('OAuth state mismatch is rejected before token exchange', async () => {
   const requests = [];
   const Xhr = fakeXhr([
