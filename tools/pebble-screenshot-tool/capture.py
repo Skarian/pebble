@@ -105,6 +105,7 @@ class BridgeHarness:
     def __init__(self, appmessage, target):
         self.appmessage = appmessage
         self.target = target
+        self.enabled = False
         self.config = {}
         self.last_request_id = ""
         self.event_sequence = 0
@@ -113,6 +114,8 @@ class BridgeHarness:
         appmessage.register_handler("appmessage", self._receive)
 
     def configure(self, config):
+        if config is not None:
+            self.enabled = True
         self.config = config or {}
         events = self.config.get("pushEvents", [])
         if events and self.last_request_id:
@@ -123,7 +126,7 @@ class BridgeHarness:
             ).start()
 
     def _receive(self, transaction_id, app_uuid, data):
-        if app_uuid != self.target:
+        if app_uuid != self.target or not self.enabled:
             return
         threading.Thread(target=self._respond, args=(data,), daemon=True).start()
 
