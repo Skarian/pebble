@@ -6,18 +6,15 @@ var xhrJson = XHR(XMLHttpRequest);
 var ResMed = require('../common/resmed_client');
 var resMed = ResMed(XMLHttpRequest, localStorage);
 var decodeSettingsResponse = require('../common/settings_response');
-var Diagnostics = require('../common/diagnostics');
-var diagnostics = Diagnostics(localStorage);
+var createAppMessageSession =
+  require('../../../../shared/appmessage/pkjs/app_message_session');
 
 var SETTINGS_KEY = 'cpap.settings.v2';
 var STATUS_UNCONFIGURED = 1;
 var STATUS_AUTH_REQUIRED = 2;
-var STATUS_NETWORK_ERROR = 3;
 var STATUS_SERVICE_ERROR = 4;
-var STATUS_SYNCING = 6;
+var STATUS_RESMED_NETWORK = 7;
 var COMMAND_PHONE_READY = 2;
-var lastRequestId = 0;
-var requestInFlight = false;
 var DEV_BRIDGE_URL = 'http://127.0.0.1:8787';
 
 function readJson(key, fallback) {
@@ -33,40 +30,51 @@ function writeJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function send(message) {
-  Pebble.sendAppMessage(message, function () {}, function () {
-    console.log('CPAP AppMessage delivery failed');
-  });
+var appMessages = createAppMessageSession({
+  app: 'cpap',
+  storage: localStorage,
+  requestIdKey: 'REQUEST_ID',
+  pebble: Pebble,
+  readyMessage: {PROTOCOL: 1, COMMAND: COMMAND_PHONE_READY},
+  onMessage: function (payload, session) {
+    if (payload.COMMAND === 1) {
+      session.handleRead(Number(payload.REQUEST_ID || 0),
+        'fetch', runScoreFetch, readOptions);
+    }
+  }
+});
+
+function statusMessage(status, text) {
+  var message = {PROTOCOL: 1, STATUS: status};
+  if (text) message.ERROR_TEXT = String(text).slice(0, 48);
+  return message;
 }
 
-function sendStatus(status, requestId, text) {
-  var message = {
-    PROTOCOL: 1,
-    STATUS: status
-  };
-  if (requestId) {
-    message.REQUEST_ID = requestId;
-  }
-  if (text) {
-    message.ERROR_TEXT = text.slice(0, 48);
-  }
-  send(message);
-}
-
-function logResMedError(context, error) {
+function logResMedError(context, requestId, error) {
   error = error || {};
-  var entry = diagnostics.record(context, error);
-  console.log('CPAP_DIAGNOSTIC ' + JSON.stringify(entry));
+  var entry = appMessages.record({
+    operation: context,
+    requestId: requestId,
+    event: 'domain_terminal',
+    lifecycle: 'active',
+    ready: true,
+    attempts: error.attempts || 1,
+    resultCode: error.code,
+    finalCategory: error.type === 'network' ? 'resmed_network' :
+      error.type === 'service' ? 'resmed_service' : error.type,
+    step: error.step,
+    status: error.status,
+    elapsedMs: error.elapsedMs,
+    replay: error.replay,
+    shape: error.shape
+  });
+  console.log('CPAP_APPMESSAGE ' + JSON.stringify(entry));
 }
 
-function trimTrailingSlash(value) {
-  return String(value || '').replace(/\/+$/, '');
-}
-
-function storeAndSendRecords(records, requestId) {
+function recordsMessage(records) {
   var fetchedAt = Date.now();
   var slots = CPAP.sevenDaySlots(records, new Date());
-  send(CPAP.responseDictionary(slots, fetchedAt, requestId, 1));
+  return CPAP.responseDictionary(slots, fetchedAt, 0, 1);
 }
 
 function isEmulator() {
@@ -78,61 +86,58 @@ function isEmulator() {
   }
 }
 
-function fetchConfiguredScores(settings) {
+function statusForError(error) {
+  if (error && error.type === 'auth') return STATUS_AUTH_REQUIRED;
+  if (error && error.type === 'network') return STATUS_RESMED_NETWORK;
+  return STATUS_SERVICE_ERROR;
+}
+
+function fetchConfiguredScores(settings, requestId, done) {
   if (!settings.email || !settings.password) {
-    requestInFlight = false;
-    sendStatus(STATUS_UNCONFIGURED, lastRequestId);
+    appMessages.record({operation: 'fetch', requestId: requestId,
+      event: 'domain_terminal', lifecycle: 'active', ready: true,
+      finalCategory: 'unconfigured'});
+    done(statusMessage(STATUS_UNCONFIGURED));
     return;
   }
-
   resMed.fetchSleepRecords({username: settings.email, password: settings.password},
     function (error, records) {
-      requestInFlight = false;
       if (error) {
-        logResMedError('refresh', error);
-        if (error.type === 'auth') {
-          sendStatus(STATUS_AUTH_REQUIRED, lastRequestId, error.message);
-        } else {
-          sendStatus(error.type === 'network' ? STATUS_NETWORK_ERROR : STATUS_SERVICE_ERROR,
-            lastRequestId, error.message);
-        }
+        logResMedError('refresh', requestId, error);
+        done(statusMessage(statusForError(error), error.message));
         return;
       }
-      storeAndSendRecords(records || [], lastRequestId);
+      done(recordsMessage(records || []));
     });
 }
 
-function fetchScores(requestId) {
-  diagnostics.replay(function (line) { console.log(line); });
-  lastRequestId = requestId || 0;
+function runScoreFetch(requestId, done) {
   var settings = readJson(SETTINGS_KEY, {});
-  if (requestInFlight) {
-    return;
-  }
-  requestInFlight = true;
-
   if (!isEmulator()) {
-    fetchConfiguredScores(settings);
+    fetchConfiguredScores(settings, requestId, done);
     return;
   }
-
   xhrJson('GET', DEV_BRIDGE_URL + '/health', '', null, function (healthError, health) {
     if (healthError || !health.devEmulator) {
-      fetchConfiguredScores(settings);
+      fetchConfiguredScores(settings, requestId, done);
       return;
     }
     xhrJson('GET', DEV_BRIDGE_URL + '/v1/dev/scores', '', null, function (error, response) {
-      requestInFlight = false;
       if (error) {
-        sendStatus(error.type === 'network' ? STATUS_NETWORK_ERROR :
-          error.type === 'auth' ? STATUS_AUTH_REQUIRED : STATUS_SERVICE_ERROR,
-        lastRequestId, error.message);
+        logResMedError('refresh', requestId, error);
+        done(statusMessage(statusForError(error), error.message));
         return;
       }
-      storeAndSendRecords(response.records || [], lastRequestId);
+      done(recordsMessage(response.records || []));
     }, {'X-CPAP-Dev': '1'});
   });
 }
+
+var readOptions = {
+  failureResponse: function () {
+    return statusMessage(STATUS_SERVICE_ERROR, 'Phone request failed');
+  }
+};
 
 function escapeHtml(value) {
   return String(value || '')
@@ -162,9 +167,9 @@ function settingsPage(settings, diagnosticReport) {
     '<label for="password">ResMed password</label><input id="password" type="password" ' +
     (hasPassword ? 'placeholder="Saved — leave blank to keep"' : 'required') +
     ' autocomplete="current-password">' +
-    '<p class="note">The Pebble mobile runtime has no keychain. Your password is stored in this app’s private local storage.</p>' +
-    '<button type="submit">Save and connect</button></form>' +
-    '<h2>Diagnostics</h2><p class="note">Saved errors contain no password or ResMed tokens. Copy this report for debugging.</p>' +
+    '<p class="note">The Pebble mobile runtime has no keychain. Your password is stored in this app’s private local storage. After saving, return to CPAP and press Select.</p>' +
+    '<button type="submit">Save</button></form>' +
+    '<h2>Connection diagnostics</h2><p class="note">Saved events contain no password, ResMed token, response body, or sleep record. Copy this report for debugging.</p>' +
     '<textarea id="diagnostics" readonly>' + escapeHtml(diagnosticReport) + '</textarea>' +
     '<button type="button" id="copy">Copy diagnostics</button><a class="cancel" href="pebblejs://close">Cancel</a>' +
     '<script>document.getElementById("copy").onclick=function(){var d=document.getElementById("diagnostics");d.select();document.execCommand("copy");this.textContent="Copied";};' +
@@ -173,52 +178,25 @@ function settingsPage(settings, diagnosticReport) {
     'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(v));};</script></main></body></html>';
 }
 
-function connectAccount(values) {
+function saveAccount(values) {
   var previous = readJson(SETTINGS_KEY, {});
   var password = values.password || previous.password;
-  if (!values.email || !password) {
-    sendStatus(STATUS_UNCONFIGURED, lastRequestId);
-    return;
-  }
-  var candidate = {version: 2, email: values.email, password: password};
-  writeJson(SETTINGS_KEY, candidate);
-  sendStatus(STATUS_SYNCING, lastRequestId);
-  requestInFlight = true;
+  if (!values.email || !password) return;
+  writeJson(SETTINGS_KEY, {version: 2, email: values.email, password: password});
   resMed.clearSession();
-  resMed.fetchSleepRecords({username: candidate.email, password: candidate.password},
-    function (error, records) {
-      requestInFlight = false;
-      if (error) {
-        logResMedError('connect', error);
-        sendStatus(error.type === 'network' ? STATUS_NETWORK_ERROR :
-          error.type === 'auth' ? STATUS_AUTH_REQUIRED : STATUS_SERVICE_ERROR,
-          lastRequestId, error.message);
-        return;
-      }
-      storeAndSendRecords(records || [], lastRequestId);
-    });
+  appMessages.record({operation: 'settings', event: 'settings_saved',
+    lifecycle: 'active', finalCategory: 'ok'});
 }
 
-Pebble.addEventListener('appmessage', function (event) {
-  if (event.payload.COMMAND === 1) {
-    fetchScores(event.payload.REQUEST_ID || 0);
-  }
-});
-
-Pebble.addEventListener('ready', function () {
-  diagnostics.replay(function (line) { console.log(line); });
-  send({PROTOCOL: 1, COMMAND: COMMAND_PHONE_READY});
-});
+appMessages.open();
 
 Pebble.addEventListener('showConfiguration', function () {
-  diagnostics.replay(function (line) { console.log(line); });
-  var page = settingsPage(readJson(SETTINGS_KEY, {}), diagnostics.report());
+  appMessages.replayLog(function (line) { console.log(line); });
+  var page = settingsPage(readJson(SETTINGS_KEY, {}), appMessages.report());
   Pebble.openURL('data:text/html;charset=utf-8,' + encodeURIComponent(page));
 });
 
 Pebble.addEventListener('webviewclosed', function (event) {
   var values = decodeSettingsResponse(event.response);
-  if (values && values.email) {
-    connectAccount(values);
-  }
+  if (values && values.email) saveAccount(values);
 });

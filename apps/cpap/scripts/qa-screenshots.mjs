@@ -2,15 +2,14 @@
 
 import {randomBytes} from 'node:crypto';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync,
-  renameSync, rmSync, writeFileSync
+  existsSync, mkdtempSync, readFileSync, rmSync
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename, dirname, join, resolve} from 'node:path';
-import {createInterface} from 'node:readline';
+import {dirname, join, resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawn} from 'node:child_process';
+import {runEmeryQa} from '../../../tools/pebble-emulator-qa.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCREENSHOT_TOOL = resolve(ROOT, '../../tools/pebble-screenshot-tool/pebble-screenshot.mjs');
@@ -54,48 +53,25 @@ export function parseEnv(text) {
 }
 
 export function chooseDataSource(env) {
-  const override = String(env.CPAP_QA_SOURCE || '').trim().toLowerCase();
-  if (override && override !== 'fake' && override !== 'live') {
+  const source = String(env.CPAP_QA_SOURCE || 'fake').trim().toLowerCase();
+  if (source !== 'fake' && source !== 'live') {
     throw new Error('CPAP_QA_SOURCE must be fake or live.');
   }
+  if (source === 'fake') return 'fake';
   const username = String(env.MYAIR_USERNAME || '').trim();
   const password = String(env.MYAIR_PASSWORD || '').trim();
   const hasUsername = Boolean(username && username !== 'you@example.com');
   const hasPassword = Boolean(password && password !== 'your-password');
-  if (override === 'fake') return 'fake';
-  if (hasUsername !== hasPassword) {
-    throw new Error('Set both MYAIR_USERNAME and MYAIR_PASSWORD, or remove both to use fake data.');
-  }
-  if (override === 'live' && !hasUsername) {
+  if (!hasUsername || !hasPassword) {
     throw new Error('CPAP_QA_SOURCE=live requires MYAIR_USERNAME and MYAIR_PASSWORD.');
   }
-  return hasUsername ? 'live' : 'fake';
+  return 'live';
 }
 
 function loadQaEnv() {
   const path = join(ROOT, '.env');
   const file = existsSync(path) ? parseEnv(readFileSync(path, 'utf8')) : {};
   return {...file, ...process.env};
-}
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd || ROOT,
-    env: options.env || process.env,
-    encoding: options.capture ? 'utf8' : undefined,
-    stdio: options.capture ? 'pipe' : options.quiet ? 'ignore' : 'inherit'
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} exited with status ${result.status}`);
-  return options.capture ? result.stdout.trim() : '';
-}
-
-function stopEmulators() {
-  spawnSync(PEBBLE_CLI, ['kill', '--force'], {cwd: ROOT, stdio: 'ignore'});
-}
-
-function timestamp() {
-  return new Date().toISOString().replace(/[-:.]/g, '');
 }
 
 function localDateOffset(days) {
@@ -115,37 +91,6 @@ function records(scores) {
     maskPairCount: [1, 0, 0, 2, 1, 4, 1][index],
     leakPercentile: [8, 4.5, 0, 12.4, 6, 24.8, 9.2][index]
   }]);
-}
-
-function pebblePython() {
-  const pebble = realpathSync(run('which', [PEBBLE_CLI], {capture: true}));
-  return join(dirname(pebble), 'python');
-}
-
-function emulatorPersistPath() {
-  return run(pebblePython(), ['-c',
-    'from pebble_tool.sdk import get_sdk_persist_dir; print(get_sdk_persist_dir("emery"))'
-  ], {capture: true});
-}
-
-function isolateEmulatorState() {
-  const persist = emulatorPersistPath();
-  const parent = dirname(persist);
-  const prefix = `${basename(persist)}.cpap-qa-backup-`;
-  const stale = readdirSync(parent).filter((name) => name.startsWith(prefix));
-  if (stale.length > 1) throw new Error(`Multiple stale CPAP QA backups exist beside ${persist}`);
-  if (stale.length === 1) {
-    rmSync(persist, {recursive: true, force: true});
-    renameSync(join(parent, stale[0]), persist);
-  }
-  const backup = join(parent, `${prefix}${process.pid}-${Date.now()}`);
-  renameSync(persist, backup);
-  mkdirSync(persist, {recursive: true});
-  return () => {
-    stopEmulators();
-    rmSync(persist, {recursive: true, force: true});
-    renameSync(backup, persist);
-  };
 }
 
 function startBridge(env, token, storePath) {
@@ -208,63 +153,6 @@ async function setScenario(token, scenario) {
   await qaFetch('/v1/dev/qa/scenario', token, {body: scenario});
 }
 
-function startCaptureSession() {
-  const helper = resolve(SCREENSHOT_TOOL, '../capture.py');
-  const child = spawn(pebblePython(), [
-    helper,
-    '--emulator', 'emery', '--serve',
-    '--pbw', join(ROOT, 'build/cpap.pbw'),
-    '--platform', 'emery'
-  ], {cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe']});
-  const lines = createInterface({input: child.stdout});
-  const pending = [];
-  let startup;
-  const ready = new Promise((resolveReady, rejectReady) => { startup = {resolveReady, rejectReady}; });
-  child.stderr.on('data', (chunk) => process.stderr.write(`[capture] ${chunk}`));
-  lines.on('line', (line) => {
-    let message;
-    try { message = JSON.parse(line); } catch { return; }
-    if (message.event === 'ready') {
-      session.qemuPid = message.qemuPid;
-      startup.resolveReady();
-    } else {
-      const request = pending.shift();
-      if (!request) return;
-      if (message.event === 'error') request.reject(new Error(message.message));
-      else request.resolve(message);
-    }
-  });
-  child.once('exit', (code) => {
-    const error = new Error(`Capture session exited with status ${code}`);
-    startup.rejectReady(error);
-    while (pending.length) pending.shift().reject(error);
-  });
-  const session = {
-    child,
-    ready,
-    qemuPid: null,
-    capture(output, buttons = [], message = null) {
-      return new Promise((resolveCapture, rejectCapture) => {
-        pending.push({resolve: resolveCapture, reject: rejectCapture});
-        child.stdin.write(`${JSON.stringify({command: 'capture', output, buttons, message})}\n`);
-      });
-    },
-    async close() {
-      if (child.exitCode !== null) return;
-      child.stdin.write(`${JSON.stringify({command: 'close'})}\n`);
-      await Promise.race([
-        new Promise((resolveExit) => child.once('exit', resolveExit)),
-        new Promise((resolveDelay) => setTimeout(resolveDelay, 2000))
-      ]);
-      if (child.exitCode === null) child.kill('SIGKILL');
-      if (this.qemuPid) {
-        try { process.kill(this.qemuPid, 'SIGKILL'); } catch {}
-      }
-    }
-  };
-  return session;
-}
-
 function encodeAppMessage(dictionary) {
   const encoded = {};
   for (const [name, value] of Object.entries(dictionary)) {
@@ -283,15 +171,16 @@ function encodeAppMessage(dictionary) {
   return encoded;
 }
 
-function statusMessage(status, text) {
-  return encodeAppMessage({PROTOCOL: 1, STATUS: status, ...(text ? {ERROR_TEXT: text} : {})});
+function statusMessage(status, requestId, text) {
+  return encodeAppMessage({PROTOCOL: 1, STATUS: status, REQUEST_ID: requestId,
+    ...(text ? {ERROR_TEXT: text} : {})});
 }
 
-async function scenarioMessage(type, fetchedAt = Date.now()) {
+async function scenarioMessage(type, requestId, fetchedAt = Date.now()) {
   if (type === 'unconfigured') {
     const health = await fetch(`${BRIDGE_URL}/health`).then((response) => response.json());
     if (health.devEmulator) throw new Error('Unconfigured QA scenario reported configured');
-    return statusMessage(1);
+    return statusMessage(1, requestId);
   }
   if (type === 'loading') {
     const health = await fetch(`${BRIDGE_URL}/health`).then((response) => response.json());
@@ -305,109 +194,113 @@ async function scenarioMessage(type, fetchedAt = Date.now()) {
     const body = await response.json();
     if (response.ok) {
       const slots = CPAP.sevenDaySlots(body.records || [], new Date());
-      return encodeAppMessage(CPAP.responseDictionary(slots, fetchedAt, 0, 1));
+      return encodeAppMessage(CPAP.responseDictionary(slots, fetchedAt, requestId, 1));
     }
-    return statusMessage(response.status === 401 ? 2 : 4, body.error);
+    return statusMessage(response.status === 401 ? 2 : 4, requestId, body.error);
   } catch {
-    return statusMessage(3, 'Phone or bridge offline');
+    return statusMessage(7, requestId, 'Could not reach ResMed');
   }
 }
 
-async function triggerScenario(captureSession, scratch, type, fetchedAt) {
-  await captureSession.capture(join(scratch, `trigger-${++triggerSequence}.png`), ['select']);
-  return scenarioMessage(type, fetchedAt);
+async function triggerScenario(qa, scratch, type, requestId, fetchedAt) {
+  await qa.captureRaw(join(scratch, `trigger-${++triggerSequence}.png`), {
+    buttons: ['select']});
+  return scenarioMessage(type, requestId, fetchedAt);
 }
 
-async function captureState(outputDir, captureSession, name, label, buttons = [], message = null) {
-  const path = join(outputDir, 'states', `${name}.png`);
-  await captureSession.capture(path, buttons, message);
-  console.log(`Captured ${label}`);
-  return {path, label, name};
+async function triggerRequest(qa, scratch) {
+  await qa.captureRaw(join(scratch, `trigger-${++triggerSequence}.png`), {
+    buttons: ['select']});
 }
 
-async function verifySameScreen(captureSession, scratch, name, expected, buttons = [], message = null) {
+async function captureState(qa, name, label, buttons = [], message = null) {
+  return qa.capture(label, {buttons, message}, {name, slug: name});
+}
+
+async function verifySameScreen(qa, scratch, name, expected, buttons = [], message = null) {
   const path = join(scratch, `verify-${name}.png`);
-  await captureSession.capture(path, buttons, message);
+  await qa.captureRaw(path, {buttons, message});
   if (!readFileSync(path).equals(readFileSync(expected))) {
     throw new Error(`${name} did not match its no-cache screen`);
   }
   console.log(`Verified ${name} matches its no-cache screen`);
 }
 
-function createBoard(states, output) {
-  const labels = states.flatMap((state, index) => [
-    '(', state.path, '-set', 'label', `${index + 1}. ${state.label}`, ')'
-  ]);
-  const common = [
-    ...labels, '-filter', 'point', '-resize', '400x456', '-tile', '4x',
-    '-geometry', '400x456+24+64', '-background', '#0d100e', '-fill', '#f1f3ec',
-    '-stroke', 'none', '-pointsize', '24', '-depth', '8', output
-  ];
-  const magick = spawnSync('magick', ['-version'], {stdio: 'ignore'}).status === 0;
-  run(magick ? 'magick' : 'montage', magick ? ['montage', ...common] : common);
-}
-
 export async function main() {
   if (!existsSync(SCREENSHOT_TOOL)) throw new Error(`Screenshot tool not found at ${SCREENSHOT_TOOL}`);
-  const env = loadQaEnv();
+  const requestedSource = String(process.env.CPAP_QA_SOURCE || 'fake').trim().toLowerCase();
+  const env = requestedSource === 'live' ? loadQaEnv() : {...process.env};
   const dataSource = chooseDataSource(env);
-  const outputDir = join(ROOT, 'qa-results', `all-screens-${timestamp()}-${dataSource}`);
+  const stamp = new Date().toISOString().replace(/[-:.]/g, '');
+  const outputDir = join(ROOT, 'qa-results', `all-screens-${stamp}-${dataSource}`);
   const scratch = mkdtempSync(join(tmpdir(), 'cpap-qa-'));
   const token = randomBytes(24).toString('hex');
-  let bridge = null;
-  let captureSession = null;
-  let restoreEmulator = null;
-  let primaryError = null;
-  const captured = [];
   let sequence = 0;
+  let watchRequestId = 1;
   const nextId = (name) => `${String(++sequence).padStart(2, '0')}-${name}`;
+  const nextWatchRequestId = () => {
+    watchRequestId = watchRequestId >= 65535 ? 1 : watchRequestId + 1;
+    return watchRequestId;
+  };
   const fullRecords = records([96, 100, 0, 74, 91, 67, 82]);
   const partialRecords = records([null, 88, 76, 91, 67, 82, 55]);
 
-  mkdirSync(join(outputDir, 'states'), {recursive: true});
-  console.log(`CPAP QA board source: deterministic scenarios${dataSource === 'live' ? ' + cached live check' : ''}`);
+  console.log(`CPAP QA board source: deterministic scenarios${dataSource === 'live' ? ' + explicit live check' : ''}`);
   try {
-    stopEmulators();
-    run(env.CPAP_QA_BUILD_CLI || PEBBLE_CLI, ['build']);
-    restoreEmulator = isolateEmulatorState();
-    bridge = startBridge(env, token, join(scratch, 'sessions.json'));
+    const completed = await runEmeryQa({
+      app: 'cpap', cwd: ROOT, pbw: join(ROOT, 'build/cpap.pbw'),
+      captureHelper: resolve(SCREENSHOT_TOOL, '../capture.py'), pebbleCli: PEBBLE_CLI,
+      outputDir,
+      prepare({run}) { run(env.CPAP_QA_BUILD_CLI || PEBBLE_CLI, ['build']); },
+      board: {
+        gapX: 12, gapY: 36, background: '#0d100e', foreground: '#f1f3ec', pointSize: 12,
+      },
+      manifest: ({result}) => ({
+        productionPbw: join(ROOT, 'build/cpap.pbw'),
+        liveIncluded: dataSource === 'live',
+        liveApiCalls: result.finalStatus.liveApiCalls,
+        liveCacheUsed: result.finalStatus.liveCacheUsed,
+      }),
+    }, async (qa) => {
+    const bridge = startBridge(env, token, join(scratch, 'sessions.json'));
+    qa.defer(() => stopChild(bridge));
     await waitForBridge(bridge, token);
 
     const loadingId = nextId('loading-empty');
     await setScenario(token, {id: loadingId, type: 'loading'});
-    captureSession = startCaptureSession();
-    await captureSession.ready;
-    await scenarioMessage('loading');
+    await captureState(qa, 'connecting-empty', 'CONNECTING TO PHONE');
+    await scenarioMessage('loading', watchRequestId);
     const initialLoading = await captureState(
-      outputDir, captureSession, 'loading-empty', 'SYNCING - NO CACHE');
+      qa, 'loading-empty', 'SYNCING - NO CACHE', [],
+      encodeAppMessage({PROTOCOL: 1, COMMAND: 2}));
 
     const unconfiguredId = nextId('unconfigured');
     await setScenario(token, {id: unconfiguredId, type: 'unconfigured'});
-    const setup = await captureState(outputDir, captureSession, 'unconfigured', 'SETUP REQUIRED', [],
-      await scenarioMessage('unconfigured'));
-    captured.push(setup, initialLoading);
+    await captureState(qa, 'unconfigured', 'SETUP REQUIRED', [],
+      await scenarioMessage('unconfigured', watchRequestId));
     const baselines = {loading: initialLoading.path};
 
     for (const [name, label, type] of [
       ['auth-empty', 'AUTH ERROR', 'auth_error'],
-      ['network-empty', 'PHONE UNREACHABLE', 'network_error'],
+      ['network-empty', 'RESMED OFFLINE', 'network_error'],
       ['service-empty', 'RESMED UNAVAILABLE', 'service_error']
     ]) {
       const id = nextId(name);
       await setScenario(token, {id, type});
-      const message = await triggerScenario(captureSession, scratch, type);
-      const state = await captureState(outputDir, captureSession, name, label, [], message);
+      const requestId = nextWatchRequestId();
+      const message = await triggerScenario(qa, scratch, type, requestId);
+      const state = await captureState(qa, name, label, [], message);
       baselines[type] = state.path;
-      captured.push(state);
     }
 
     const successId = nextId('success');
     await setScenario(token, {id: successId, type: 'records', records: fullRecords});
-    const successMessage = await triggerScenario(captureSession, scratch, 'records');
-    captured.push(await captureState(outputDir, captureSession, 'day-1', 'DAY 1 - SCORE', [],
-      successMessage));
+    const successRequestId = nextWatchRequestId();
+    const successMessage = await triggerScenario(
+      qa, scratch, 'records', successRequestId);
+    await captureState(qa, 'day-1', 'DAY 1 - SCORE', [], successMessage);
     for (let day = 2; day <= 7; day += 1) {
-      captured.push(await captureState(outputDir, captureSession, `day-${day}`, `DAY ${day} - SCORE`, ['up']));
+      await captureState(qa, `day-${day}`, `DAY ${day} - SCORE`, ['up']);
     }
 
     for (const [name, label, buttons] of [
@@ -417,7 +310,7 @@ export async function main() {
       ['graph-mask-off', 'GRAPH - MASK OFF', ['down']],
       ['graph-leak', 'GRAPH - LEAK', ['down']]
     ]) {
-      captured.push(await captureState(outputDir, captureSession, name, label, buttons));
+      await captureState(qa, name, label, buttons);
     }
 
     for (const [name, label, ageMs, buttons] of [
@@ -426,38 +319,64 @@ export async function main() {
       ['updated-3h', 'UPDATED 3 HOURS AGO', 3 * 60 * 60 * 1000, []],
       ['updated-2d', 'UPDATED 2 DAYS AGO', 2 * 24 * 60 * 60 * 1000, []]
     ]) {
+      const requestId = nextWatchRequestId();
+      await triggerRequest(qa, scratch);
       const message = encodeAppMessage(CPAP.responseDictionary(
-        CPAP.sevenDaySlots(fullRecords, new Date()), Date.now() - ageMs, 0, 1));
-      captured.push(await captureState(outputDir, captureSession, name, label, buttons, message));
+        CPAP.sevenDaySlots(fullRecords, new Date()), Date.now() - ageMs, requestId, 1));
+      await captureState(qa, name, label, buttons, message);
     }
 
     const partialId = nextId('partial');
     await setScenario(token, {id: partialId, type: 'records', records: partialRecords});
-    const partialMessage = await triggerScenario(captureSession, scratch, 'records');
-    captured.push(await captureState(outputDir, captureSession, 'partial', 'NO SCORE', [], partialMessage));
-    captured.push(await captureState(outputDir, captureSession, 'graph-partial',
-      'GRAPH - MISSING DAY', ['down'], partialMessage));
+    const partialRequestId = nextWatchRequestId();
+    const partialMessage = await triggerScenario(
+      qa, scratch, 'records', partialRequestId);
+    await captureState(qa, 'partial', 'NO SCORE', [], partialMessage);
+    await captureState(qa, 'graph-partial', 'GRAPH - MISSING DAY', ['down']);
 
     const restoreId = nextId('restore-cache');
     await setScenario(token, {id: restoreId, type: 'records', records: fullRecords});
-    const restoreMessage = await triggerScenario(captureSession, scratch, 'records');
-    await captureSession.capture(join(scratch, `restore-${++triggerSequence}.png`), ['up'], restoreMessage);
+    const restoreRequestId = nextWatchRequestId();
+    const restoreMessage = await triggerScenario(
+      qa, scratch, 'records', restoreRequestId);
+    await qa.captureRaw(join(scratch, `restore-${++triggerSequence}.png`), {
+      buttons: ['up'], message: restoreMessage});
 
     const cachedLoadingId = nextId('loading-cached');
     await setScenario(token, {id: cachedLoadingId, type: 'loading'});
-    await triggerScenario(captureSession, scratch, 'loading');
-    await verifySameScreen(captureSession, scratch, 'cached loading', baselines.loading);
+    const cachedLoadingRequestId = nextWatchRequestId();
+    await triggerScenario(qa, scratch, 'loading', cachedLoadingRequestId);
+    await verifySameScreen(qa, scratch, 'cached loading', baselines.loading);
+
+    const cachedAuthId = nextId('cached-auth-error');
+    await setScenario(token, {id: cachedAuthId, type: 'auth_error'});
+    await verifySameScreen(qa, scratch, 'cached auth error',
+      baselines.auth_error, [], await scenarioMessage('auth_error', cachedLoadingRequestId));
 
     for (const [name, type] of [
-      ['cached auth error', 'auth_error'],
       ['cached network error', 'network_error'],
       ['cached service error', 'service_error']
     ]) {
       const id = nextId(name);
       await setScenario(token, {id, type});
-      const message = await triggerScenario(captureSession, scratch, type);
-      await verifySameScreen(captureSession, scratch, name, baselines[type], [], message);
+      const requestId = nextWatchRequestId();
+      const message = await triggerScenario(qa, scratch, type, requestId);
+      await verifySameScreen(qa, scratch, name, baselines[type], [], message);
     }
+
+    const timeoutId = nextId('phone-response-timeout');
+    await setScenario(token, {id: timeoutId, type: 'loading'});
+    const timeoutRequestId = nextWatchRequestId();
+    await triggerRequest(qa, scratch);
+    await captureState(qa, 'phone-timeout', 'PHONE RESPONSE TIMEOUT', [],
+      statusMessage(8, timeoutRequestId));
+
+    const recoveryId = nextId('recovery');
+    await setScenario(token, {id: recoveryId, type: 'records', records: fullRecords});
+    const recoveryRequestId = nextWatchRequestId();
+    const recoveryMessage = await triggerScenario(
+      qa, scratch, 'records', recoveryRequestId);
+    await captureState(qa, 'recovered', 'RECOVERED DATA', [], recoveryMessage);
 
     let finalStatus = await qaFetch('/v1/dev/qa/status', token);
     if (dataSource === 'live') {
@@ -467,45 +386,25 @@ export async function main() {
         type: 'live',
         refreshLive: env.CPAP_QA_REFRESH_LIVE === '1'
       });
-      const liveMessage = await triggerScenario(captureSession, scratch, 'live');
+      const liveRequestId = nextWatchRequestId();
+      const liveMessage = await triggerScenario(
+        qa, scratch, 'live', liveRequestId);
       finalStatus = await qaFetch('/v1/dev/qa/status', token);
-      captured.push(await captureState(outputDir, captureSession, 'live', 'LIVE DATA', [], liveMessage));
+      await captureState(qa, 'live', 'LIVE DATA', [], liveMessage);
     }
 
-    const board = join(outputDir, 'all-states.png');
-    createBoard(captured, board);
-    writeFileSync(join(outputDir, 'manifest.json'), `${JSON.stringify({
-      generatedAt: new Date().toISOString(),
-      productionPbw: true,
-      states: captured.map(({name, label}, index) => ({number: index + 1, name, label})),
-      liveIncluded: dataSource === 'live',
-      liveApiCalls: finalStatus.liveApiCalls,
-      liveCacheUsed: finalStatus.liveCacheUsed
-    }, null, 2)}\n`);
-    console.log(`Created ${board}`);
-    console.log(`ResMed API calls this run: ${finalStatus.liveApiCalls}`);
-  } catch (error) {
-    primaryError = error;
+    return {finalStatus};
+    });
+    console.log(`Created ${completed.board}`);
+    console.log(`ResMed API calls this run: ${completed.result.finalStatus.liveApiCalls}`);
   } finally {
-    if (captureSession) await captureSession.close();
-    stopEmulators();
-    await stopChild(bridge);
-    if (restoreEmulator) {
-      try {
-        restoreEmulator();
-      } catch (restoreError) {
-        if (!primaryError) primaryError = restoreError;
-        else console.error(`Emulator-state restore also failed: ${restoreError.message}`);
-      }
-    }
     rmSync(scratch, {recursive: true, force: true});
   }
-  if (primaryError) throw primaryError;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(`CPAP screenshot QA failed: ${error.message}`);
-    process.exitCode = 1;
+    process.exitCode = error.exitCode || 1;
   });
 }

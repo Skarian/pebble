@@ -28,28 +28,38 @@ than waiting for a particular calendar date, so a missing day does not prevent
 the following day's score from opening the app. No ResMed credential, API token,
 email address, or device identifier is ever sent to or stored on the watch.
 
+Every launch, manual refresh, and automatic check passes through the same
+AppMessage client. It waits briefly for the phone's repeatable `READY`
+announcement, then falls back after 1.5 seconds because `READY` is advisory and
+can itself be lost. A logical read gets one request ID which is reused for all
+bounded AppMessage and response-timeout retries. Only a response carrying that
+active ID can update the cache. A late reply from an older request is ignored.
+The phone coalesces exact-ID repeats, joins concurrent fetch IDs to one ResMed
+operation, and retains a small in-memory terminal result so a lost reply can be
+replayed without another HTTP operation.
+
+Watch-to-phone delivery failure, a phone response timeout, and a ResMed network
+failure are separate states. They render as `PHONE OFFLINE`, `SYNC TIMED OUT`,
+and `RESMED OFFLINE` respectively. AppMessage delivery retries never start or
+relabel a ResMed request.
+
 The phone retries the complete ResMed operation once after a one-second delay
 only for connection failures, timeouts, and upstream `502`, `503`, or `504`
 responses. Authentication failures, rate limits, and other client errors are
-never retried. The watch and phone each allow 30 seconds for the blocking
-refresh; individual upstream HTTP requests time out after 12 seconds.
+never retried. Each watch response window is 30 seconds; a timed-out read can
+resend the same ID within the client's three total delivery attempts.
+Individual upstream HTTP requests time out after 12 seconds.
 
-### Durable diagnostics
+### Connection diagnostics
 
-The phone retains the latest twelve failed ResMed operations in its private
-PebbleKit JS storage. Each entry contains the time, refresh or connection
-context, failing protocol step, HTTP status, elapsed time, both retry attempts,
-and a replay code plus redacted response structure. Only JSON keys and value
-types are retained from an upstream response; passwords, OAuth tokens,
-authorization codes, email addresses, response values, and sleep records are
-not logged.
-
-There are two ways to retrieve an older failure:
-
-1. Open CPAP's settings in the Pebble mobile app and tap **Copy diagnostics**.
-2. Start `pebble logs --phone PHONE_IP`, then open CPAP's settings. The phone
-   re-emits every saved entry with the `CPAP_DIAGNOSTIC` prefix without making
-   a ResMed request.
+The phone retains thirty-two sanitized AppMessage/domain events, plus safe
+ResMed step/status/timing metadata, in PebbleKit JS storage. It excludes
+credentials, payload values, and response bodies. Use **Copy diagnostics** under
+**Connection diagnostics** in
+CPAP Settings or the centralized commands in
+[`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).
+Opening Settings also replays the saved ring to phone logs with the stable
+`CPAP_APPMESSAGE` prefix.
 
 The `replay` field identifies the exact simulated failure to construct in the
 client tests, such as `http:sleep-records:503`,
@@ -98,18 +108,20 @@ The one-command visual QA runner builds the normal production PBW and creates a
 single review board containing every watch-visible state: setup, loading, auth,
 network and service failures with and without cache, partial data, all seven
 day pages, all five graphs, missing graph data, and relative update-time
-variants. Scenario data is supplied by the loopback development bridge; the
+variants. It also covers phone connection, response timeout, and recovery.
+Scenario data is supplied by the loopback development bridge; the
 watch app contains no QA fixtures, flags, or alternate behavior. The QA runner
 uses the screenshot tool's direct QEMU session as a lightweight test phone: it
 requests controlled bridge responses, delivers normal typed AppMessages, sends
 real emulator button events, and captures the production app after each display
 settles. It does not launch the unstable pypkjs JavaScript runtime.
 
-The runner automatically chooses its optional live-data behavior:
+The runner is deterministic by default and does not read `.env` or contact
+ResMed. Its optional live-data behavior is explicit:
 
-- If both ResMed credentials exist in `.env`, it adds one live-data screen.
-- If `.env` is missing or still contains the example placeholders, it uses a
-  deterministic state matrix and makes no ResMed request.
+- `npm run qa:screenshots` always uses the deterministic state matrix.
+- `CPAP_QA_SOURCE=live npm run qa:screenshots` adds one private live-data screen
+  and requires both ResMed credentials in `.env`.
 
 Run it with:
 
@@ -117,15 +129,17 @@ Run it with:
 npm run qa:screenshots
 ```
 
-Individual screens and `all-states.png` are written beneath the ignored
-`qa-results/` directory. The runner uses isolated Emery flash; PebbleKit JS
-storage is not involved. It restores the developer's previous emulator flash
-and stops its QEMU process even after failures. Set
+Individual native 200x228 screens and the numbered `all-states.png` contact
+sheet are written beneath the ignored `qa-results/` directory. The runner owns
+`/private/tmp/pebble-emulator-qa.lock` while using isolated Emery flash;
+PebbleKit JS storage is not involved. It restores the developer's previous
+emulator flash, stops only its own QEMU process, and releases the lock even
+after failures. Set
 `CPAP_QA_SOURCE=fake` for a no-network run even when credentials exist.
 
 Live records are stored owner-only in ignored `data/qa-live-cache.json` and
-reused for 24 hours. A run makes at most one ResMed request, even when explicitly
-refreshed with `CPAP_QA_REFRESH_LIVE=1`; routine reruns normally make zero.
+reused for 24 hours. An explicitly live run makes at most one ResMed request,
+even with `CPAP_QA_REFRESH_LIVE=1`; ordinary QA runs always make zero.
 
 For live QA, use this exact file:
 
@@ -177,8 +191,9 @@ path.
 ## Connect a physical watch
 
 Install `build/cpap.pbw`, then open CPAP's Settings in the Pebble mobile app and
-enter the USA ResMed myAir email and password. Press **Save and connect**. No
-bridge URL, server, setup token, or running computer is required.
+enter the USA ResMed myAir email and password. Press **Save**, return to the
+watch, and press Select. No bridge URL, server, setup token, or running computer
+is required.
 
 For local-Wi-Fi developer installation:
 
@@ -206,6 +221,8 @@ The resulting installable bundle is `build/cpap.pbw`.
 
 - `src/c/main.c` — Emery watch UI, button navigation, cache, and AppMessage handling.
 - `src/pkjs/index.js` — phone settings and watch communication.
+- `../../shared/appmessage/pkjs/app_message_session.js` — serialized AppMessage delivery,
+  READY announcements, exact-ID read replay, and redacted connection diagnostics.
 - `src/common/resmed_client.js` — direct USA myAir OAuth/PKCE and GraphQL client.
 - `src/common/sha256.js` — small ES5 SHA-256 implementation used for PKCE.
 - `src/common/cpap_model.js` — seven-day date and nightly-metric normalization.

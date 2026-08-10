@@ -1,10 +1,10 @@
 #include <pebble.h>
+#include <app_message_client.h>
 
 #define DAYS 7
 #define AXIS_LEVELS 5
 #define CACHE_VERSION 3
 #define PERSIST_KEY_CACHE 100
-#define RESPONSE_TIMEOUT_MS 30000
 #define WAKEUP_START_HOUR 10
 #define WAKEUP_LAST_HOUR 22
 #define WAKEUP_INTERVAL_HOURS 2
@@ -24,11 +24,20 @@ enum {
   STATUS_OK = 0,
   STATUS_UNCONFIGURED = 1,
   STATUS_AUTH_REQUIRED = 2,
-  STATUS_NETWORK_ERROR = 3,
+  STATUS_PHONE_CONNECTION = 3,
   STATUS_SERVICE_ERROR = 4,
   STATUS_PARTIAL = 5,
   STATUS_SYNCING = 6,
+  STATUS_RESMED_NETWORK = 7,
+  STATUS_RESPONSE_TIMEOUT = 8,
 };
+
+typedef enum {
+  LOAD_PHASE_NONE = 0,
+  LOAD_PHASE_CONNECTING,
+  LOAD_PHASE_RETRYING,
+  LOAD_PHASE_SYNCING,
+} LoadPhase;
 
 enum {
   VIEW_DAY = 0,
@@ -65,20 +74,18 @@ static TextLayer *s_state_body_layer;
 static TextLayer *s_state_footer_layer;
 static Layer *s_ring_layer;
 static Layer *s_graph_layer;
-static AppTimer *s_response_timer;
+static AppMessageClient *s_phone;
 
 static ScoreCache s_cache;
 static uint8_t s_selected_day;
 static uint8_t s_view;
-static uint16_t s_request_id;
 static bool s_has_cache;
 static bool s_loading;
+static LoadPhase s_load_phase;
 static uint8_t s_status;
 static char s_error_text[49];
 static bool s_automatic_check;
 static bool s_window_visible;
-static bool s_phone_ready;
-static bool s_waiting_for_phone;
 static uint8_t s_status_before_automatic_check;
 
 static const char *WEEKDAYS[] = {
@@ -131,8 +138,8 @@ static void schedule_next_wakeup(bool tomorrow) {
 
 static void finish_automatic_check(bool show_new_record, uint8_t result_status) {
   s_loading = false;
+  s_load_phase = LOAD_PHASE_NONE;
   s_automatic_check = false;
-  s_waiting_for_phone = false;
 
   if (!show_new_record) {
     s_status = s_status_before_automatic_check;
@@ -527,7 +534,13 @@ static void render(void) {
     return;
   }
   if (s_loading) {
-    render_state("SYNCING...", "", "");
+    if (s_load_phase == LOAD_PHASE_CONNECTING) {
+      render_state("CONNECTING...", "PHONE", "");
+    } else if (s_load_phase == LOAD_PHASE_RETRYING) {
+      render_state("RETRYING...", "PHONE CONNECTION", "");
+    } else {
+      render_state("SYNCING...", "", "");
+    }
     return;
   }
 
@@ -540,8 +553,16 @@ static void render(void) {
       render_state("ERROR", "Open CPAP settings\nto reconnect ResMed",
                    "PRESS SELECT TO RETRY");
       break;
-    case STATUS_NETWORK_ERROR:
-      render_state("ERROR", "Phone cannot be reached",
+    case STATUS_PHONE_CONNECTION:
+      render_state("PHONE OFFLINE", "Open the Pebble app",
+                   "PRESS SELECT TO RETRY");
+      break;
+    case STATUS_RESPONSE_TIMEOUT:
+      render_state("SYNC TIMED OUT", "No reply from phone",
+                   "PRESS SELECT TO RETRY");
+      break;
+    case STATUS_RESMED_NETWORK:
+      render_state("RESMED OFFLINE", "Could not reach ResMed",
                    "PRESS SELECT TO RETRY");
       break;
     case STATUS_SERVICE_ERROR:
@@ -556,72 +577,76 @@ static void render(void) {
   }
 }
 
-static void response_timeout(void *context) {
-  s_response_timer = NULL;
-  if (!s_loading) {
-    return;
+static void phone_state_changed(
+    const AppMessageClientStatus *status,
+    void *context) {
+  (void)context;
+  bool should_render = true;
+  switch (status->state) {
+    case APP_MESSAGE_CLIENT_WAITING_READY:
+    case APP_MESSAGE_CLIENT_WAITING_OUTBOX:
+      s_load_phase = LOAD_PHASE_CONNECTING;
+      break;
+    case APP_MESSAGE_CLIENT_BACKING_OFF:
+      s_load_phase = LOAD_PHASE_RETRYING;
+      break;
+    case APP_MESSAGE_CLIENT_WAITING_RESPONSE:
+      s_load_phase = LOAD_PHASE_SYNCING;
+      break;
+    case APP_MESSAGE_CLIENT_IDLE:
+    case APP_MESSAGE_CLIENT_FAILED:
+      s_load_phase = LOAD_PHASE_NONE;
+      should_render = false;
+      break;
+    default:
+      break;
   }
+  if (should_render && !s_automatic_check && s_window_visible) render();
+}
+
+static void phone_request_failed(
+    const AppMessageFailureInfo *failure,
+    void *context) {
+  (void)context;
+  APP_LOG(APP_LOG_LEVEL_WARNING, "Request %s failed: stage=%d result=%d",
+          failure->request_id, failure->failure, failure->result);
   if (s_automatic_check) {
-    finish_automatic_check(false, STATUS_NETWORK_ERROR);
+    finish_automatic_check(false, STATUS_PHONE_CONNECTION);
     return;
   }
   s_loading = false;
-  s_status = STATUS_NETWORK_ERROR;
-  render();
-}
-
-static void cancel_response_timer(void) {
-  if (s_response_timer) {
-    app_timer_cancel(s_response_timer);
-    s_response_timer = NULL;
-  }
+  s_load_phase = LOAD_PHASE_NONE;
+  s_status = failure->failure == APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT
+      ? STATUS_RESPONSE_TIMEOUT : STATUS_PHONE_CONNECTION;
+  if (s_window_visible) render();
 }
 
 static void start_automatic_check(void) {
-  if (s_phone_ready) {
-    request_scores(true);
-    return;
-  }
-  s_automatic_check = true;
-  s_waiting_for_phone = true;
-  s_status_before_automatic_check = s_status;
-  s_loading = true;
-  cancel_response_timer();
-  s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
+  request_scores(true);
 }
 
 static void request_scores(bool automatic) {
+  if (app_message_client_is_active(s_phone)) return;
   s_automatic_check = automatic;
-  if (automatic) {
-    s_status_before_automatic_check = s_status;
-  }
-
-  DictionaryIterator *out;
-  AppMessageResult result = app_message_outbox_begin(&out);
-  if (result != APP_MSG_OK) {
-    if (automatic) {
-      finish_automatic_check(false, STATUS_NETWORK_ERROR);
-      return;
+  if (automatic) s_status_before_automatic_check = s_status;
+  s_loading = true;
+  s_load_phase = LOAD_PHASE_CONNECTING;
+  s_status = STATUS_OK;
+  AppMessageStartResult result = app_message_client_start(
+      s_phone, COMMAND_FETCH, APP_MESSAGE_OPERATION_READ,
+      NULL, APP_MESSAGE_SEND_PRIMARY);
+  if (result != APP_MESSAGE_START_STARTED &&
+      result != APP_MESSAGE_START_COALESCED) {
+    if (automatic) finish_automatic_check(false, STATUS_PHONE_CONNECTION);
+    else {
+      s_loading = false;
+      s_load_phase = LOAD_PHASE_NONE;
+      s_status = STATUS_PHONE_CONNECTION;
+      render();
     }
-    s_loading = false;
-    s_status = STATUS_NETWORK_ERROR;
-    render();
     return;
   }
-
-  s_request_id += 1;
-  dict_write_uint8(out, MESSAGE_KEY_PROTOCOL, 1);
-  dict_write_uint8(out, MESSAGE_KEY_COMMAND, COMMAND_FETCH);
-  dict_write_uint16(out, MESSAGE_KEY_REQUEST_ID, s_request_id);
-  app_message_outbox_send();
-
-  s_loading = true;
-  s_status = STATUS_OK;
-  cancel_response_timer();
-  s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
-  if (!automatic) {
-    render();
-  }
+  if (!automatic && s_window_visible) render();
 }
 
 static uint32_t tuple_uint32(DictionaryIterator *iterator, uint32_t key, uint32_t fallback) {
@@ -629,41 +654,26 @@ static uint32_t tuple_uint32(DictionaryIterator *iterator, uint32_t key, uint32_
   return tuple ? tuple->value->uint32 : fallback;
 }
 
-static void inbox_received(DictionaryIterator *iterator, void *context) {
+static AppMessageResponseAction receive_response(
+    DictionaryIterator *iterator,
+    const AppMessageClientStatus *request,
+    void *context) {
+  (void)request;
+  (void)context;
   Tuple *protocol = dict_find(iterator, MESSAGE_KEY_PROTOCOL);
-  if (protocol && protocol->value->uint8 != 1) {
-    return;
-  }
-
-  Tuple *command = dict_find(iterator, MESSAGE_KEY_COMMAND);
-  if (command && command->value->uint8 == COMMAND_PHONE_READY) {
-    s_phone_ready = true;
-    if (s_waiting_for_phone) {
-      s_waiting_for_phone = false;
-      request_scores(true);
-    }
-    return;
-  }
-
-  Tuple *response_id = dict_find(iterator, MESSAGE_KEY_REQUEST_ID);
-  if (response_id && response_id->value->uint16 != s_request_id) {
-    return;
-  }
+  if (!protocol || protocol->value->uint8 != 1) return APP_MESSAGE_RESPONSE_IGNORE;
 
   Tuple *status = dict_find(iterator, MESSAGE_KEY_STATUS);
   if (status && status->value->uint8 == STATUS_SYNCING) {
-    cancel_response_timer();
     s_loading = true;
+    s_load_phase = LOAD_PHASE_SYNCING;
     s_status = STATUS_OK;
-    s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
-    if (!s_automatic_check) {
-      render();
-    }
-    return;
+    if (!s_automatic_check) render();
+    return APP_MESSAGE_RESPONSE_MORE;
   }
 
-  cancel_response_timer();
   s_loading = false;
+  s_load_phase = LOAD_PHASE_NONE;
 
   s_status = status ? status->value->uint8 : STATUS_SERVICE_ERROR;
 
@@ -736,25 +746,10 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
 
   if (s_automatic_check) {
     finish_automatic_check(received_records && has_new_record, result_status);
-    return;
+    return APP_MESSAGE_RESPONSE_DONE;
   }
   render();
-}
-
-static void inbox_dropped(AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_WARNING, "Inbox dropped: %d", reason);
-}
-
-static void outbox_failed(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_WARNING, "Outbox failed: %d", reason);
-  cancel_response_timer();
-  if (s_automatic_check) {
-    finish_automatic_check(false, STATUS_NETWORK_ERROR);
-    return;
-  }
-  s_loading = false;
-  s_status = STATUS_NETWORK_ERROR;
-  render();
+  return APP_MESSAGE_RESPONSE_DONE;
 }
 
 static void up_click(ClickRecognizerRef recognizer, void *context) {
@@ -894,6 +889,7 @@ static void init(void) {
     s_cache.leak_x10[i] = METRIC_UNAVAILABLE;
   }
   s_status = STATUS_OK;
+  s_load_phase = LOAD_PHASE_NONE;
   s_selected_day = 0;
   s_view = VIEW_DAY;
   bool automatic_launch = launch_reason() == APP_LAUNCH_WAKEUP;
@@ -909,6 +905,24 @@ static void init(void) {
   schedule_next_wakeup(!automatic_launch && cache_has_yesterday());
   bool refresh_on_launch = automatic_launch || !cache_has_yesterday();
   s_loading = refresh_on_launch;
+  if (refresh_on_launch) s_load_phase = LOAD_PHASE_CONNECTING;
+
+  AppMessageClientConfig phone_config = {
+    .app_name = "cpap",
+    .inbox_size = 1024,
+    .outbox_size = 64,
+    .protocol = {
+      .protocol_key = MESSAGE_KEY_PROTOCOL,
+      .command_key = MESSAGE_KEY_COMMAND,
+      .request_id_key = MESSAGE_KEY_REQUEST_ID,
+      .protocol_version = 1,
+      .ready_command = COMMAND_PHONE_READY,
+      .request_id_codec = APP_MESSAGE_ID_UINT16,
+    },
+    .response_received = receive_response,
+    .state_changed = phone_state_changed,
+    .request_failed = phone_request_failed,
+  };
 
   s_window = window_create();
   window_set_background_color(s_window, GColorWhite);
@@ -918,10 +932,8 @@ static void init(void) {
   });
   window_set_click_config_provider(s_window, click_config_provider);
 
-  app_message_register_inbox_received(inbox_received);
-  app_message_register_inbox_dropped(inbox_dropped);
-  app_message_register_outbox_failed(outbox_failed);
-  app_message_open(1024, 64);
+  AppMessageResult open_result;
+  s_phone = app_message_client_open(&phone_config, &open_result);
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   if (automatic_launch) {
     s_probe_window = window_create();
@@ -931,14 +943,22 @@ static void init(void) {
     s_window_visible = true;
     window_stack_push(s_window, true);
   }
-  if (automatic_launch) start_automatic_check();
-  else if (refresh_on_launch) request_scores(false);
+  if (open_result == APP_MSG_OK) {
+    if (automatic_launch) start_automatic_check();
+    else if (refresh_on_launch) request_scores(false);
+  } else if (automatic_launch) {
+    finish_automatic_check(false, STATUS_PHONE_CONNECTION);
+  } else if (refresh_on_launch) {
+    s_loading = false;
+    s_load_phase = LOAD_PHASE_NONE;
+    s_status = STATUS_PHONE_CONNECTION;
+    render();
+  }
 }
 
 static void deinit(void) {
-  cancel_response_timer();
+  app_message_client_close(s_phone);
   tick_timer_service_unsubscribe();
-  app_message_deregister_callbacks();
   if (s_probe_window) window_destroy(s_probe_window);
   window_destroy(s_window);
 }

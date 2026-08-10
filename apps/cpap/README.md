@@ -28,8 +28,9 @@ score and opens only when one arrives.
 ## Connect ResMed
 
 Install `build/cpap.pbw`, then open CPAP Settings in the Pebble phone app. Enter
-the email and password for a USA ResMed myAir account and tap Save and connect.
-No computer or bridge server is needed after installation.
+the email and password for a USA ResMed myAir account and tap Save. Return to
+CPAP on the watch and press Select to make the first correlated refresh. No
+computer or bridge server is needed after installation.
 
 The credentials stay in CPAP's private PebbleKit JS storage on the phone. They
 are never sent to the watch. PebbleKit JS cannot use the Android or iOS system

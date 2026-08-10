@@ -51,7 +51,7 @@ test('serializes all seven AppMessage fields', () => {
   assert.equal(message.DAY6_LEAK_X10, 65535);
 });
 
-test('responses without a request id remain valid for settings and QA delivery', () => {
+test('base responses omit zero so the request session can attach the real identity', () => {
   const slots = model.sevenDaySlots([], new Date(2026, 7, 1, 8, 0, 0));
   const message = model.responseDictionary(slots, 10000, 0, 1);
   assert.equal(Object.prototype.hasOwnProperty.call(message, 'REQUEST_ID'), false);

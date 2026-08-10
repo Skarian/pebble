@@ -14,7 +14,6 @@ test('launch refreshes only when yesterday is not already cached', () => {
 });
 
 test('manual refresh remains blocking and explicit', () => {
-  assert.match(watch, /#define RESPONSE_TIMEOUT_MS 30000/);
   assert.match(watch, /if \(!s_loading\) request_scores\(false\);/);
   const tick = watch.slice(watch.indexOf('static void tick_handler'), watch.indexOf('static void init'));
   assert.doesNotMatch(tick.slice(0, tick.indexOf('static void wakeup_handler')), /request_scores/);
@@ -27,8 +26,8 @@ test('automatic checks run every two hours from 10 AM and only reveal a newer re
   assert.match(watch, /launch_reason\(\) == APP_LAUNCH_WAKEUP/);
   assert.match(watch, /schedule_next_wakeup\(false\);[\s\S]*start_automatic_check\(\);/);
   assert.match(watch, /schedule_next_wakeup\(true\);[\s\S]*s_selected_day = 0/);
-  assert.match(watch, /COMMAND_PHONE_READY[\s\S]*request_scores\(true\);/);
-  assert.match(phone, /addEventListener\('ready'[\s\S]*COMMAND_PHONE_READY/);
+  assert.match(watch, /should_render && !s_automatic_check && s_window_visible/);
+  assert.match(watch, /if \(!automatic && s_window_visible\) render\(\);/);
   assert.match(watch, /latest_available_date\(&s_cache\) > previous_latest_date/);
   assert.match(watch, /finish_automatic_check\(received_records && has_new_record, result_status\)/);
   assert.match(watch, /if \(!s_window_visible\) \{[\s\S]*window_stack_pop_all\(false\);/);
@@ -37,7 +36,9 @@ test('automatic checks run every two hours from 10 AM and only reveal a newer re
 
 test('phone sends only the final ResMed result and dev does not wait for a request', () => {
   assert.doesNotMatch(phone, /SCORES_KEY|sendCached/);
-  assert.doesNotMatch(phone, /addEventListener\('ready'[\s\S]*fetchScores/);
+  assert.match(phone, /readyMessage: \{PROTOCOL: 1, COMMAND: COMMAND_PHONE_READY\}/);
+  assert.match(phone, /appMessages\.open\(\)/);
+  assert.doesNotMatch(phone, /Pebble\.sendAppMessage|Pebble\.addEventListener\('ready'|Pebble\.addEventListener\('appmessage'/);
   assert.doesNotMatch(dev, /scoresReady/);
 });
 
@@ -45,7 +46,7 @@ test('physical-watch settings and refresh use direct ResMed, not a production br
   assert.match(phone, /require\('\.\.\/common\/resmed_client'\)/);
   assert.match(phone, /resMed\.fetchSleepRecords/);
   assert.doesNotMatch(phone, /Bridge URL|Bridge setup token|\/v1\/login|\/v1\/scores/);
-  assert.match(phone, /Credentials stay in this app on your phone/);
-  assert.match(phone, /sendStatus\(STATUS_SYNCING, lastRequestId\)/);
-  assert.match(phone, /writeJson\(SETTINGS_KEY, candidate\)/);
+  const saveAccount = phone.slice(phone.indexOf('function saveAccount'),
+    phone.indexOf('appMessages.open();'));
+  assert.doesNotMatch(saveAccount, /fetchSleepRecords|handleRead/);
 });
