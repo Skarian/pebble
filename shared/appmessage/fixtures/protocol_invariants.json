@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "invariants": {
+    "ready": "advisory-repeatable",
+    "requestIdentity": "stable-across-attempts",
+    "replyIdentity": "echo-request-id",
+    "staleReplies": "ignore",
+    "reads": "idempotent-single-flight",
+    "mutations": "reconcile-after-acknowledged-delivery",
+    "outboundMessages": "one-in-flight",
+    "sessionGeneration": false
+  },
+  "faultScenarios": [
+    "ready-before-grace",
+    "ready-after-fallback",
+    "ready-lost-next-operation-falls-back",
+    "immediate-send-failure-then-success",
+    "asynchronous-send-failure-then-success",
+    "stale-response-ignored",
+    "read-timeout-resends-same-id",
+    "mutation-timeout-reconciles-same-id"
+  ]
+}
