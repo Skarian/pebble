@@ -46,7 +46,6 @@ static AirCache s_cache;
 static bool s_has_cache;
 static bool s_loading;
 static bool s_scale_loading;
-static AppMessageClientState s_delivery_state = APP_MESSAGE_CLIENT_IDLE;
 static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
 static uint8_t s_scale = DEFAULT_SCALE;
@@ -147,9 +146,6 @@ static bool is_error_status(uint8_t status) {
 
 static void draw_state(GContext *ctx, GRect bounds) {
   const char *title = "SYNCING...";
-  if (s_delivery_state == APP_MESSAGE_CLIENT_WAITING_READY) title = "CONNECTING...";
-  else if (s_delivery_state == APP_MESSAGE_CLIENT_BACKING_OFF) title = "RETRYING...";
-  else if (s_delivery_state == APP_MESSAGE_CLIENT_WAITING_OUTBOX) title = "SENDING...";
   const char *body = "";
   const char *footer = "";
   if (s_status == STATUS_SETUP) {
@@ -367,14 +363,6 @@ static DictionaryResult write_request(
       request->operation == COMMAND_SCALE ? s_pending_scale : s_scale);
 }
 
-static void phone_state_changed(
-    const AppMessageClientStatus *status,
-    void *context) {
-  (void)context;
-  s_delivery_state = status->state;
-  if (s_canvas) layer_mark_dirty(s_canvas);
-}
-
 static void phone_request_failed(
     const AppMessageFailureInfo *failure,
     void *context) {
@@ -573,7 +561,6 @@ static void init(void) {
     },
     .write_payload = write_request,
     .response_received = receive_response,
-    .state_changed = phone_state_changed,
     .request_failed = phone_request_failed,
   };
   AppMessageResult open_result;

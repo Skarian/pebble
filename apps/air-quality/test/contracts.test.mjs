@@ -112,6 +112,8 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /if \(s_loading \|\| is_error_status\(s_status\)\)/);
   assert.doesNotMatch(watch, /!s_has_cache && \(s_loading/);
   assert.doesNotMatch(watch, /short_error|SELECT RETRY/);
+  assert.doesNotMatch(watch, /s_delivery_state|CONNECTING\.\.\.|RETRYING\.\.\.|SENDING\.\.\./);
+  assert.match(watch, /static void draw_state[\s\S]*const char \*title = "SYNCING\.\.\."/);
   assert.match(watch, /s_status = STATUS_SERVICE;/);
   assert.match(watch, /APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT\s*\? STATUS_RESPONSE_TIMEOUT/);
   assert.match(watch, /s_pending_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
@@ -164,8 +166,10 @@ test('QA owns fake states, shared lock, isolated flash, and no global emulator k
   assert.match(qa, /runEmeryQa/);
   assert.doesNotMatch(qa, /pebble', \['kill/);
   assert.match(qa, /background: '#0d100e'/);
-  assert.match(qa, /CONNECTING/);
-  assert.match(qa, /CACHED RESPONSE - SYNCING/);
+  assert.match(qa, /SYNCING - COLD START/);
+  assert.match(qa, /SYNCING - CACHED RESPONSE/);
+  assert.match(qa, /Phone READY changed the stable syncing screen/);
+  assert.match(qa, /Cached response changed the stable syncing screen/);
   assert.match(qa, /SYNC TIMED OUT AFTER CACHE/);
   assert.match(qa, /PHONE OFFLINE AFTER CACHE/);
   assert.match(qa, /RECOVERED LIVE/);

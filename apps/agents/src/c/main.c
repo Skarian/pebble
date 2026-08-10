@@ -414,12 +414,6 @@ static void show_error(ErrorKind error, const char *detail) {
   render();
 }
 
-static bool request_connecting(const char *request_id) {
-  const AppMessageClientStatus *status = app_message_client_status(s_phone);
-  return app_message_client_has_request(s_phone, request_id) && status &&
-      status->state != APP_MESSAGE_CLIENT_WAITING_RESPONSE;
-}
-
 static void render_error(void) {
   const char *title = "ERROR";
   const char *body = s_error_text;
@@ -518,8 +512,7 @@ static void render_history(void) {
   text_layer_set_text(s_header_left, "MESSAGES");
   if (s_history_loading) {
     text_layer_set_text(s_header_right, "");
-    bool connecting = request_connecting(s_history_request_id);
-    render_state(connecting ? "CONNECTING..." : "LOADING...", "", "BACK TO AGENT");
+    render_state("LOADING...", "", "BACK TO AGENT");
     return;
   }
   if (s_history_failed) {
@@ -569,12 +562,10 @@ static void render(void) {
     else configure_agent();
   } else if (s_screen == SCREEN_SYNCING) {
     text_layer_set_text(s_header_left, "AGENTS");
-    bool connecting = request_connecting(s_refresh_request_id);
-    render_state(connecting ? "CONNECTING..." : "SYNCING...", "", "");
+    render_state("SYNCING...", "", "");
   } else if (s_screen == SCREEN_SENDING) {
     set_turn_header();
-    bool connecting = request_connecting(s_request_id);
-    render_state(connecting ? "CONNECTING..." : "SENDING...", "", "");
+    render_state("SENDING...", "", "");
   } else if (s_screen == SCREEN_STREAMING) {
     set_turn_header();
     if (!s_current_message[0] || strcmp(s_current_message, "WORKING...") == 0) {

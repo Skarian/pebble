@@ -47,7 +47,7 @@ async function main() {
       manifest: {productionPbw: PBW, nativeDictation: true},
     }, async ({capture}) => {
 
-    await capture('COLD START - CONNECTING', {
+    await capture('COLD START - SYNCING', {
       bridge: {agents: AGENTS}, skipStable: true, waitMs: 100,
     });
     await capture('FIRST AGENT - READY RECOVERY', {
@@ -66,7 +66,7 @@ async function main() {
     await capture('NATIVE TRANSCRIPT - CONFIRM', {
       buttons: ['select'], voice: {transcription: 'Check the deployment status'}, waitMs: 700,
     });
-    await capture('SENDING', {
+    await capture('WORKING - DELIVERY ACKNOWLEDGED', {
       buttons: ['select'], skipStable: true, waitMs: 600,
       bridge: {events: [{kind: 11, delayMs: 2200}]},
     });

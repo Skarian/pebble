@@ -25,7 +25,12 @@ test('native dictation confirmation and streaming mode are production behavior',
 test('approved watch copy and shared working layout remain in source', () => {
   assert.match(source, /SAVED AGENTS/);
   assert.doesNotMatch(source, /CACHED ON PHONE|Phone delivery failed|DELIVERY UNKNOWN/);
+  assert.doesNotMatch(source, /CONNECTING\.\.\.|request_connecting/);
+  assert.match(source, /s_screen == SCREEN_SYNCING[\s\S]*render_state\("SYNCING\.\.\."/);
+  assert.match(source, /s_screen == SCREEN_SENDING[\s\S]*render_state\("SENDING\.\.\."/);
+  assert.match(source, /s_history_loading[\s\S]*render_state\("LOADING\.\.\."/);
   assert.match(source, /render_state\("WORKING\.\.\."/);
+  assert.match(qa, /COLD START - SYNCING/);
 });
 
 test('QA is deterministic, isolated, and phone independent', () => {

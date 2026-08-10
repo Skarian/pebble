@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import {createRequire} from 'node:module';
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, rmSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runEmeryQa} from '../../../tools/pebble-emulator-qa.mjs';
@@ -103,16 +103,28 @@ async function main() {
     },
     board: {gapX: 18, gapY: 48, background: '#0d100e', foreground: '#f1f3ec'},
     manifest: {source, productionPbw: PBW},
-  }, async ({capture: captureScreen}) => {
+  }, async (qa) => {
+    const captureScreen = qa.capture;
     const capture = (label, message, buttons = [], options = {}) => captureScreen(label, {
       buttons, message, skipStable: Boolean(options.skipStable), waitMs: options.waitMs || 0,
     });
 
     let requestId = 1;
-    await capture('CONNECTING', null, [], {skipStable: true, waitMs: 80});
+    const coldSyncing = await capture('SYNCING - COLD START');
+    const readyVerification = `/private/tmp/air-quality-ready-${process.pid}.png`;
+    qa.defer(() => rmSync(readyVerification, {force: true}));
+    await qa.captureRaw(readyVerification, {
+      message: encode({PROTOCOL: 2, COMMAND: 2}),
+    });
+    if (!readFileSync(coldSyncing.path).equals(readFileSync(readyVerification))) {
+      throw new Error('Phone READY changed the stable syncing screen');
+    }
     const staleObservedAt = Date.now() - 3 * 86400000;
-    await capture('CACHED RESPONSE - SYNCING', encode(Model.dictionary(
+    const cachedSyncing = await capture('SYNCING - CACHED RESPONSE', encode(Model.dictionary(
       snapshot(1120, {stale: true, cached: true}), staleObservedAt, requestId)));
+    if (!readFileSync(coldSyncing.path).equals(readFileSync(cachedSyncing.path))) {
+      throw new Error('Cached response changed the stable syncing screen');
+    }
     await capture('SYNC TIMED OUT AFTER CACHE', status(10, requestId));
 
     requestId += 1;
