@@ -19,6 +19,11 @@ test('manual refresh remains blocking and explicit', () => {
   assert.doesNotMatch(tick.slice(0, tick.indexOf('static void wakeup_handler')), /request_scores/);
 });
 
+test('an active refresh keeps one stable syncing screen', () => {
+  assert.match(watch, /if \(s_loading\) \{\s*render_state\("SYNCING\.\.\."/);
+  assert.doesNotMatch(watch, /LOAD_PHASE_|CONNECTING\.\.\.|RETRYING\.\.\./);
+});
+
 test('automatic checks run every two hours from 10 AM and only reveal a newer record', () => {
   assert.match(watch, /#define WAKEUP_START_HOUR 10/);
   assert.match(watch, /#define WAKEUP_LAST_HOUR 22/);
@@ -26,7 +31,6 @@ test('automatic checks run every two hours from 10 AM and only reveal a newer re
   assert.match(watch, /launch_reason\(\) == APP_LAUNCH_WAKEUP/);
   assert.match(watch, /schedule_next_wakeup\(false\);[\s\S]*start_automatic_check\(\);/);
   assert.match(watch, /schedule_next_wakeup\(true\);[\s\S]*s_selected_day = 0/);
-  assert.match(watch, /should_render && !s_automatic_check && s_window_visible/);
   assert.match(watch, /if \(!automatic && s_window_visible\) render\(\);/);
   assert.match(watch, /latest_available_date\(&s_cache\) > previous_latest_date/);
   assert.match(watch, /finish_automatic_check\(received_records && has_new_record, result_status\)/);

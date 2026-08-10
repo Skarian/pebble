@@ -32,13 +32,6 @@ enum {
   STATUS_RESPONSE_TIMEOUT = 8,
 };
 
-typedef enum {
-  LOAD_PHASE_NONE = 0,
-  LOAD_PHASE_CONNECTING,
-  LOAD_PHASE_RETRYING,
-  LOAD_PHASE_SYNCING,
-} LoadPhase;
-
 enum {
   VIEW_DAY = 0,
   VIEW_SCORE_GRAPH = 1,
@@ -81,7 +74,6 @@ static uint8_t s_selected_day;
 static uint8_t s_view;
 static bool s_has_cache;
 static bool s_loading;
-static LoadPhase s_load_phase;
 static uint8_t s_status;
 static char s_error_text[49];
 static bool s_automatic_check;
@@ -138,7 +130,6 @@ static void schedule_next_wakeup(bool tomorrow) {
 
 static void finish_automatic_check(bool show_new_record, uint8_t result_status) {
   s_loading = false;
-  s_load_phase = LOAD_PHASE_NONE;
   s_automatic_check = false;
 
   if (!show_new_record) {
@@ -534,13 +525,7 @@ static void render(void) {
     return;
   }
   if (s_loading) {
-    if (s_load_phase == LOAD_PHASE_CONNECTING) {
-      render_state("CONNECTING...", "PHONE", "");
-    } else if (s_load_phase == LOAD_PHASE_RETRYING) {
-      render_state("RETRYING...", "PHONE CONNECTION", "");
-    } else {
-      render_state("SYNCING...", "", "");
-    }
+    render_state("SYNCING...", "", "");
     return;
   }
 
@@ -577,33 +562,6 @@ static void render(void) {
   }
 }
 
-static void phone_state_changed(
-    const AppMessageClientStatus *status,
-    void *context) {
-  (void)context;
-  bool should_render = true;
-  switch (status->state) {
-    case APP_MESSAGE_CLIENT_WAITING_READY:
-    case APP_MESSAGE_CLIENT_WAITING_OUTBOX:
-      s_load_phase = LOAD_PHASE_CONNECTING;
-      break;
-    case APP_MESSAGE_CLIENT_BACKING_OFF:
-      s_load_phase = LOAD_PHASE_RETRYING;
-      break;
-    case APP_MESSAGE_CLIENT_WAITING_RESPONSE:
-      s_load_phase = LOAD_PHASE_SYNCING;
-      break;
-    case APP_MESSAGE_CLIENT_IDLE:
-    case APP_MESSAGE_CLIENT_FAILED:
-      s_load_phase = LOAD_PHASE_NONE;
-      should_render = false;
-      break;
-    default:
-      break;
-  }
-  if (should_render && !s_automatic_check && s_window_visible) render();
-}
-
 static void phone_request_failed(
     const AppMessageFailureInfo *failure,
     void *context) {
@@ -615,7 +573,6 @@ static void phone_request_failed(
     return;
   }
   s_loading = false;
-  s_load_phase = LOAD_PHASE_NONE;
   s_status = failure->failure == APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT
       ? STATUS_RESPONSE_TIMEOUT : STATUS_PHONE_CONNECTION;
   if (s_window_visible) render();
@@ -630,7 +587,6 @@ static void request_scores(bool automatic) {
   s_automatic_check = automatic;
   if (automatic) s_status_before_automatic_check = s_status;
   s_loading = true;
-  s_load_phase = LOAD_PHASE_CONNECTING;
   s_status = STATUS_OK;
   AppMessageStartResult result = app_message_client_start(
       s_phone, COMMAND_FETCH, APP_MESSAGE_OPERATION_READ,
@@ -640,7 +596,6 @@ static void request_scores(bool automatic) {
     if (automatic) finish_automatic_check(false, STATUS_PHONE_CONNECTION);
     else {
       s_loading = false;
-      s_load_phase = LOAD_PHASE_NONE;
       s_status = STATUS_PHONE_CONNECTION;
       render();
     }
@@ -666,14 +621,12 @@ static AppMessageResponseAction receive_response(
   Tuple *status = dict_find(iterator, MESSAGE_KEY_STATUS);
   if (status && status->value->uint8 == STATUS_SYNCING) {
     s_loading = true;
-    s_load_phase = LOAD_PHASE_SYNCING;
     s_status = STATUS_OK;
     if (!s_automatic_check) render();
     return APP_MESSAGE_RESPONSE_MORE;
   }
 
   s_loading = false;
-  s_load_phase = LOAD_PHASE_NONE;
 
   s_status = status ? status->value->uint8 : STATUS_SERVICE_ERROR;
 
@@ -889,7 +842,6 @@ static void init(void) {
     s_cache.leak_x10[i] = METRIC_UNAVAILABLE;
   }
   s_status = STATUS_OK;
-  s_load_phase = LOAD_PHASE_NONE;
   s_selected_day = 0;
   s_view = VIEW_DAY;
   bool automatic_launch = launch_reason() == APP_LAUNCH_WAKEUP;
@@ -905,7 +857,6 @@ static void init(void) {
   schedule_next_wakeup(!automatic_launch && cache_has_yesterday());
   bool refresh_on_launch = automatic_launch || !cache_has_yesterday();
   s_loading = refresh_on_launch;
-  if (refresh_on_launch) s_load_phase = LOAD_PHASE_CONNECTING;
 
   AppMessageClientConfig phone_config = {
     .app_name = "cpap",
@@ -920,7 +871,6 @@ static void init(void) {
       .request_id_codec = APP_MESSAGE_ID_UINT16,
     },
     .response_received = receive_response,
-    .state_changed = phone_state_changed,
     .request_failed = phone_request_failed,
   };
 
@@ -950,7 +900,6 @@ static void init(void) {
     finish_automatic_check(false, STATUS_PHONE_CONNECTION);
   } else if (refresh_on_launch) {
     s_loading = false;
-    s_load_phase = LOAD_PHASE_NONE;
     s_status = STATUS_PHONE_CONNECTION;
     render();
   }

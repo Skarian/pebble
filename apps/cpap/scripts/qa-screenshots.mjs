@@ -268,11 +268,11 @@ export async function main() {
 
     const loadingId = nextId('loading-empty');
     await setScenario(token, {id: loadingId, type: 'loading'});
-    await captureState(qa, 'connecting-empty', 'CONNECTING TO PHONE');
-    await scenarioMessage('loading', watchRequestId);
     const initialLoading = await captureState(
-      qa, 'loading-empty', 'SYNCING - NO CACHE', [],
-      encodeAppMessage({PROTOCOL: 1, COMMAND: 2}));
+      qa, 'loading-empty', 'SYNCING - NO CACHE');
+    await scenarioMessage('loading', watchRequestId);
+    await verifySameScreen(qa, scratch, 'syncing after phone READY',
+      initialLoading.path, [], encodeAppMessage({PROTOCOL: 1, COMMAND: 2}));
 
     const unconfiguredId = nextId('unconfigured');
     await setScenario(token, {id: unconfiguredId, type: 'unconfigured'});
