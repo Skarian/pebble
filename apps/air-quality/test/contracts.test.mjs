@@ -31,7 +31,8 @@ test('watch keeps a new versioned last-good cache and rejects stale responses', 
   assert.match(watch, /CACHE_VERSION 6/);
   assert.match(watch, /PROTOCOL_VERSION 2/);
   assert.match(watch, /PERSIST_KEY_CACHE 4102/);
-  assert.match(watch, /!request \|\| request->value->uint16 != s_request_id/);
+  assert.match(watch, /FLAG_STALE 0x01/);
+  assert.match(watch, /FLAG_CACHED 0x02/);
   assert.match(watch, /observed->value->uint32 < s_cache\.observed_at/);
   assert.match(watch, /persist_write_data\(PERSIST_KEY_CACHE/);
 });
@@ -52,13 +53,14 @@ test('production routes through Android companion and bundles no PebbleKit JS', 
   assert.doesNotMatch(wscript, /js_entry_file|src\/pkjs/);
   assert.equal(existsSync(new URL('../src/pkjs/index.js', import.meta.url)), false);
   assert.match(companion, /BasePebbleListenerService/);
-  assert.match(companion, /latestRequest\.get\(\) != requestId/);
+  assert.match(companion, /AirQualityRequestPipeline/);
+  assert.match(companion, /AppMessageSession/);
   assert.match(companion, /PROTOCOL_VERSION/);
-  assert.match(companion, /DefaultPebbleSender/);
+  assert.doesNotMatch(companion, /DefaultPebbleSender|latestRequest/);
 });
 
 test('chart refreshes repair missing history from the Aranet device', () => {
-  assert.match(companion, /backfillHistoryIfNeeded\(address, settings\.watchName, scale\)/);
+  assert.match(companion, /backfillHistoryIfNeeded\(request, address, settings\.watchName, request\.scale\)/);
   assert.match(companion, /historyMutex\.withLock/);
   assert.match(companion, /lookbackSeconds = lookbackSeconds/);
   assert.match(companion, /ReadingStore\(this\)\.use \{ it\.saveAll\(readings\) \}/);
@@ -72,7 +74,6 @@ test('Android companion uses on-demand reads plus one notification-free daily sy
   assert.match(dailySync, /ExistingPeriodicWorkPolicy\.KEEP/);
   assert.match(dailySync, /scanner\.readOnce\(address\)/);
   assert.match(dailySync, /requiredHistoryLookbackSeconds\(address, now, ChartScale\.WEEK\.windowSeconds\)/);
-  assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
   assert.match(settings, /last_daily_sync_attempt_at/);
   assert.match(settings, /last_daily_sync_success_at/);
   assert.match(dailySync, /Daily sync saved a fresh reading/);
@@ -108,13 +109,15 @@ test('current refresh blocks while chart scale changes stay nonblocking', () => 
   assert.match(watch, /static uint8_t s_scale = DEFAULT_SCALE/);
   assert.match(watch, /static uint8_t s_pending_scale = DEFAULT_SCALE/);
   assert.match(watch, /s_cache\.scale < SCALE_COUNT \? s_cache\.scale : DEFAULT_SCALE/);
-  assert.match(watch, /if \(s_loading\) draw_state/);
+  assert.match(watch, /if \(s_loading \|\| is_error_status\(s_status\)\)/);
+  assert.doesNotMatch(watch, /!s_has_cache && \(s_loading/);
+  assert.doesNotMatch(watch, /short_error|SELECT RETRY/);
+  assert.match(watch, /s_status = STATUS_SERVICE;/);
+  assert.match(watch, /APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT\s*\? STATUS_RESPONSE_TIMEOUT/);
   assert.match(watch, /s_pending_scale = \(s_scale \+ 1\) % SCALE_COUNT/);
   assert.match(watch, /request_data\(COMMAND_SCALE\)/);
   assert.match(watch, /if \(command == COMMAND_SCALE\) s_scale_loading = true/);
   assert.doesNotMatch(watch, /if \(s_scale_loading\) draw_state/);
-  assert.match(companion, /command == PebbleProtocol\.COMMAND_FETCH/);
-  assert.match(companion, /if \(refreshSensor\)/);
   assert.match(watch, /SCALE_NAMES\[\] = \{"1 HOUR", "1 DAY", "1 WEEK"\}/);
   assert.match(watch, /AXIS_LEFT\[\] = \{"-1 HR", "-1 DAY", "-1 WEEK"\}/);
   assert.match(watch, /AXIS_MIDDLE\[\] = \{"-30 MIN", "-12 HR", "-3 DAYS"\}/);
@@ -151,19 +154,25 @@ test('current state uses the three Aranet display states and concise stale copy'
   assert.match(watch, /if \(state == 1\)/);
   assert.match(watch, /if \(state == 3\)/);
   assert.match(watch, /Updated %lud ago/);
-  assert.doesNotMatch(watch, /"PARTIAL|"STALE|medical|ventilat/i);
-  for (const [label, value] of [['GOOD', 720], ['AVERAGE', 1180], ['UNHEALTHY', 1650]]) {
-    assert.match(qa, new RegExp(`capture\\('${label}'.*snapshot\\(${value}`));
-  }
+  assert.doesNotMatch(watch, /medical|ventilat/i);
+  assert.match(qa, /snapshot\(720, \{co2State: 1\}\)/);
+  assert.match(qa, /\['AVERAGE', 1180, 2\]/);
+  assert.match(qa, /\['UNHEALTHY', 1650, 3\]/);
 });
 
 test('QA owns fake states, shared lock, isolated flash, and no global emulator kill', () => {
-  assert.match(qa, /pebble-emulator-qa\.lock/);
-  assert.match(qa, /airquality-qa-backup/);
+  assert.match(qa, /runEmeryQa/);
   assert.doesNotMatch(qa, /pebble', \['kill/);
-  assert.match(qa, /all-states\.png/);
-  assert.match(qa, /-background', '#0d100e'/);
-  assert.match(qa, /COMPANION OFFLINE/);
-  assert.match(qa, /BLUETOOTH OFF/);
-  assert.match(qa, /PERMISSION NEEDED/);
+  assert.match(qa, /background: '#0d100e'/);
+  assert.match(qa, /CONNECTING/);
+  assert.match(qa, /CACHED RESPONSE - SYNCING/);
+  assert.match(qa, /SYNC TIMED OUT AFTER CACHE/);
+  assert.match(qa, /PHONE OFFLINE AFTER CACHE/);
+  assert.match(qa, /RECOVERED LIVE/);
+  assert.match(qa, /SETUP REQUIRED AFTER CACHE/);
+  assert.match(qa, /BLUETOOTH OFF AFTER CACHE/);
+  assert.match(qa, /PERMISSION NEEDED AFTER CACHE/);
+  assert.match(qa, /SENSOR NOT FOUND AFTER CACHE/);
+  assert.match(qa, /SENSOR TIMED OUT AFTER CACHE/);
+  assert.match(qa, /SERVICE ERROR AFTER CACHE/);
 });

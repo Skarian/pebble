@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AirQualityCompanion"
-include(":app")
+include(":app", ":pebble-appmessage")
+project(":pebble-appmessage").projectDir = file("../../shared/appmessage/android")

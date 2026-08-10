@@ -47,6 +47,9 @@ object PebbleProtocol {
     const val STATUS_SERVICE = 7
     const val STATUS_PARTIAL = 8
 
+    const val FLAG_STALE = 0x01
+    const val FLAG_CACHED = 0x02
+
     fun phoneReady(): PebbleDictionary = mapOf(
         PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(PROTOCOL_VERSION),
         COMMAND.toUInt() to PebbleDictionaryItem.UInt8(COMMAND_PHONE_READY),
@@ -62,15 +65,21 @@ object PebbleProtocol {
         return result
     }
 
-    fun snapshot(snapshot: AirSnapshot, requestId: Int, nowEpochSeconds: Long): PebbleDictionary {
+    fun snapshot(
+        snapshot: AirSnapshot,
+        requestId: Int,
+        nowEpochSeconds: Long,
+        cached: Boolean = false,
+    ): PebbleDictionary {
         val partial = snapshot.averages.any { it == null }
         val stale = nowEpochSeconds - snapshot.current.observedAtEpochSeconds > 30 * 60
+        val flags = (if (stale) FLAG_STALE else 0) or (if (cached) FLAG_CACHED else 0)
         val result = mutableMapOf<UInt, PebbleDictionaryItem>(
             PROTOCOL.toUInt() to PebbleDictionaryItem.UInt8(PROTOCOL_VERSION),
             STATUS.toUInt() to PebbleDictionaryItem.UInt8(if (partial) STATUS_PARTIAL else STATUS_OK),
             REQUEST_ID.toUInt() to PebbleDictionaryItem.UInt16(requestId),
             OBSERVED_AT.toUInt() to PebbleDictionaryItem.UInt32(snapshot.current.observedAtEpochSeconds),
-            FLAGS.toUInt() to PebbleDictionaryItem.UInt8(if (stale) 1 else 0),
+            FLAGS.toUInt() to PebbleDictionaryItem.UInt8(flags),
             LOCATION.toUInt() to PebbleDictionaryItem.Text(snapshot.location),
             CO2_STATE.toUInt() to PebbleDictionaryItem.UInt8(snapshot.current.co2State),
             BATTERY.toUInt() to PebbleDictionaryItem.Int32(snapshot.current.batteryPercent),

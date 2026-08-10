@@ -22,8 +22,9 @@ chart screens cover the last hour, day, or week.
 - Charts open at one day. Press Select to switch between one day, one week,
   and one hour.
 
-The watch keeps the last good reading when the sensor or phone is unavailable.
-The current-reading screen shows how old that reading is.
+The watch retains the last good reading for recovery, but connecting, syncing,
+setup, and failure states take over the full screen instead of appearing over
+old measurements. A successful reading still shows its age.
 
 ## What you need
 

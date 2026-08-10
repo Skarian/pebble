@@ -11,9 +11,10 @@ air measurement.
 - Press **Select** on a chart to cycle through **1 hour**, **1 day**, and
   **1 week**.
 
-The watch keeps the last good reading. Missing values appear as `--`, and the
-update line always says how old the visible reading is. AirQuality is for
-awareness only and does not give medical advice.
+The watch keeps the last good reading internally for recovery. Connecting,
+syncing, and error states take over the full screen; a successful response
+returns to the reading and shows its age. Missing values appear as `--`.
+AirQuality is for awareness only and does not give medical advice.
 
 ## What you need
 
@@ -65,10 +66,11 @@ After you choose a sensor, the companion imports up to eight days of readings
 already stored in the Aranet4. The database retains eight days. Opening the
 watch app, pressing Select on its current screen, or tapping **Refresh now** on
 Android saves a fresh reading. A battery-optimized WorkManager job does the same
-about once per day. Before returning a chart, the companion checks the selected
-time window for gaps longer than 15 minutes. When it finds one, it requests only
-the missing tail of the Aranet4's on-device history and merges it into the
-database by timestamp. The daily job also repairs gaps across the one-week chart.
+about once per day. After returning the cached and live responses, the companion
+checks the selected time window for gaps longer than 15 minutes in the
+background. When it finds one, it requests only the missing tail of the
+Aranet4's on-device history and merges it into the database by timestamp for a
+later refresh. The daily job also repairs gaps across the one-week chart.
 
 All three chart scales use the same rolling time-series view. The graph has 56
 time columns, which is the useful horizontal resolution at Pebble size. Every
@@ -102,7 +104,7 @@ This fake-data command tests the contracts, builds the production PBW, and
 creates a numbered `qa-results/.../all-states.png` board. It covers setup,
 loading, companion and Bluetooth problems, permission, missing sensor, timeout,
 service failure, all three device CO2 states, missing metrics and history,
-old data, the current screen, and every chart at every scale.
+cache-preloaded failures, recovery, the current screen, and representative charts.
 
 The fake states are injected from the repository QA runner. The production PBW
 contains no fixtures, QA navigation, local server, or test mode. The runner
@@ -117,7 +119,8 @@ request IDs, stale-response rejection, and numbered QA board follow the
 working `apps/cpap/` app. The updated line is promoted to a more readable system
 font after native-device review. The Aranet adaptation removes cloud setup,
 AQI, continuous monitoring, technical status prose, and extra metadata. There is one
-primary value or action per screen.
+primary value or action per screen. The cache remains available for recovery,
+but it never appears behind a connecting, syncing, setup, or failure state.
 
 The device's own CO2 state drives the face instead of hard-coded thresholds,
 because Aranet lets users customize its CO2 limits. The standard defaults are
@@ -152,7 +155,7 @@ Useful primary references:
 
 - Watchapp UUID: `496e29b5-9542-430b-b75a-14dbb399b884`
 - Android package: `com.skarian.airquality`
-- Watch cache: key `4102`, version `5`
+- Watch cache: key `4102`, version `6`
 - Android database: `airquality-readings.db`
 - Notification ID/channel: `4102` / `airquality-monitor`
 - QA scratch: `/private/tmp/airquality-qa-*`

@@ -26,4 +26,24 @@ class PebbleProtocolTest {
             (message[PebbleProtocol.SERIES_CO2.toUInt()] as PebbleDictionaryItem.Bytes).value.size)
         assertTrue(message.containsKey(PebbleProtocol.AVG_PRESSURE_X10.toUInt()))
     }
+
+    @Test
+    fun `cached and stale flags remain independent`() {
+        val current = AranetReading("AA", "Aranet4", 1_000, 612, 224, 462, 10086, 87, 1)
+        val snapshot = SnapshotAggregator.build(
+            listOf(current), "HOME", 1_000, ChartScale.HOUR,
+        )!!
+
+        val freshCached = PebbleProtocol.snapshot(snapshot, 18, 1_000, cached = true)
+        val staleCached = PebbleProtocol.snapshot(snapshot, 18, 3_000, cached = true)
+
+        assertEquals(
+            PebbleProtocol.FLAG_CACHED.toUByte(),
+            (freshCached[PebbleProtocol.FLAGS.toUInt()] as PebbleDictionaryItem.UInt8).value,
+        )
+        assertEquals(
+            (PebbleProtocol.FLAG_CACHED or PebbleProtocol.FLAG_STALE).toUByte(),
+            (staleCached[PebbleProtocol.FLAGS.toUInt()] as PebbleDictionaryItem.UInt8).value,
+        )
+    }
 }

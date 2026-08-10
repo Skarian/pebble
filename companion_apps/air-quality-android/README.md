@@ -6,8 +6,15 @@ advertisements, imports up to eight days of sensor history, stores readings
 locally, and sends the current view to Pebble. Reads happen when requested by
 the watch or Android app, plus one battery-optimized sync about once per day.
 There is no continuous Bluetooth scan or persistent notification.
-The setup screen shows the age of the last successful automatic sync. Sanitized
-diagnostics also retain its last attempt and success times without sensor values.
+The watch receives the latest stored snapshot first, then one live reading. A
+retry with the same request ID shares or replays that work instead of starting a
+parallel Bluetooth scan. Missing chart history is repaired only after the
+interactive response, or by the daily sync.
+
+The setup screen shows the age of the last successful automatic sync. A bounded
+local AppMessage log records lifecycle, request, retry, delivery-result, and
+domain-error categories. It never records sensor addresses, measurements,
+names, credentials, or other message payloads.
 
 <img src="screenshots/air-quality-companion.png" width="270" alt="AirQuality Companion setup screen">
 
@@ -29,3 +36,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Open the app, allow Nearby devices, choose the Aranet4, and set the short name
 that should appear on the watch.
+
+## Connection diagnostics
+
+Open AirQuality and tap **Copy connection diagnostics** for the bounded redacted report.
+Exact UI, logcat, and debug-APK retrieval steps are centralized in
+[`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).

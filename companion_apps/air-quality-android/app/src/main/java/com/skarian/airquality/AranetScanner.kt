@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.ParcelUuid
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class DiscoveredAranet(
     val address: String,
@@ -71,9 +72,18 @@ class AranetScanner(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun readOnce(address: String, timeoutMillis: Long = 15000, complete: (AranetReading?) -> Unit) {
-        val scanner = adapter?.bluetoothLeScanner ?: run { complete(null); return }
-        var finished = false
+    fun readOnce(
+        address: String,
+        timeoutMillis: Long = 15000,
+        complete: (AranetReading?) -> Unit,
+    ): () -> Unit {
+        val scanner = adapter?.bluetoothLeScanner
+        if (scanner == null) {
+            complete(null)
+            return {}
+        }
+        val finished = AtomicBoolean()
+        var timeout: Runnable? = null
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID) ?: return
@@ -86,16 +96,19 @@ class AranetScanner(private val context: Context) {
 
             override fun onScanFailed(errorCode: Int) { finish(null) }
 
-            fun finish(reading: AranetReading?) {
-                if (finished) return
-                finished = true
+            fun finish(reading: AranetReading?, deliver: Boolean = true) {
+                if (!finished.compareAndSet(false, true)) return
+                timeout?.let(handler::removeCallbacks)
                 runCatching { scanner.stopScan(this) }
-                complete(reading)
+                if (deliver) complete(reading)
             }
         }
         val filter = ScanFilter.Builder().setDeviceAddress(address).build()
         scanner.startScan(listOf(filter), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
-        handler.postDelayed({ callback.finish(null) }, timeoutMillis)
+        val timeoutTask = Runnable { callback.finish(null) }
+        timeout = timeoutTask
+        handler.postDelayed(timeoutTask, timeoutMillis)
+        return { callback.finish(null, deliver = false) }
     }
 
     private fun serviceFilters(): List<ScanFilter> = listOf(

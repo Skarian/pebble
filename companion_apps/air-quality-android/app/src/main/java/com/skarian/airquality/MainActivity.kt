@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -11,6 +13,7 @@ import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import java.time.Instant
 import kotlin.math.abs
 
@@ -22,7 +25,9 @@ class MainActivity : Activity() {
     private lateinit var currentReading: TextView
     private lateinit var detailReading: TextView
     private lateinit var serviceStatus: TextView
+    private lateinit var diagnosticsStatus: TextView
     private var historyImporting = false
+    private val diagnostics by lazy { AirQualityPebbleService.appMessageSession(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,10 +38,12 @@ class MainActivity : Activity() {
         currentReading = findViewById(R.id.currentReading)
         detailReading = findViewById(R.id.detailReading)
         serviceStatus = findViewById(R.id.serviceStatus)
+        diagnosticsStatus = findViewById(R.id.diagnosticsStatus)
         watchName.setText(settings.watchName)
 
         findViewById<Button>(R.id.chooseSensor).setOnClickListener { chooseSensor() }
         findViewById<Button>(R.id.refreshNow).setOnClickListener { refreshNow() }
+        findViewById<Button>(R.id.copyDiagnostics).setOnClickListener { copyDiagnostics() }
         AirQualityDailySync.schedule(this)
         updateUi()
         maybeImportHistory()
@@ -44,6 +51,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        diagnostics.replayLogcat()
         updateUi()
         maybeImportHistory()
     }
@@ -172,8 +180,8 @@ class MainActivity : Activity() {
                     Log.i(HISTORY_LOG_TAG, "Imported ${readings.size} saved readings")
                     "Imported ${readings.size} saved readings."
                 },
-                onFailure = { error ->
-                    Log.w(HISTORY_LOG_TAG, "Saved history import failed: ${error.message}")
+                onFailure = {
+                    Log.w(HISTORY_LOG_TAG, "Saved history import failed")
                     "Saved history unavailable. New readings will still be saved."
                 },
             )
@@ -183,6 +191,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateUi() {
+        diagnosticsStatus.text = "Stored locally without sensor readings or addresses."
         val address = settings.sensorAddress
         sensorStatus.text = if (address.isNullOrBlank()) "No sensor selected" else settings.sensorName ?: "Aranet4"
         if (address.isNullOrBlank()) {
@@ -215,6 +224,13 @@ class MainActivity : Activity() {
         } else {
             "Daily sync enabled · First automatic sync pending."
         }
+    }
+
+    private fun copyDiagnostics() {
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(
+            ClipData.newPlainText("Air Quality connection diagnostics", diagnostics.exportLog()),
+        )
+        Toast.makeText(this, "Diagnostics copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

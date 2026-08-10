@@ -40,3 +40,15 @@ test('dictionary marks incomplete history without adding provider credentials', 
   assert.equal(message.SERIES_CO2.length, 112);
   assert.equal(message.SCALE, 0);
 });
+
+test('cached and stale are independent protocol flags', () => {
+  const freshCache = model.dictionary({
+    location: 'Home', cached: true, stale: false, current: {co2: 612},
+  }, Date.UTC(2026, 7, 9), 17);
+  const staleLive = model.dictionary({
+    location: 'Home', cached: false, stale: true, current: {co2: 612},
+  }, Date.UTC(2026, 7, 9), 18);
+
+  assert.equal(freshCache.FLAGS, 2);
+  assert.equal(staleLive.FLAGS, 1);
+});

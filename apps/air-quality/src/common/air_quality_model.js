@@ -82,7 +82,7 @@ function dictionary(snapshot, observedAt, requestId, requestedScale) {
     PROTOCOL: 2,
     STATUS: isPartial(snapshot.current, columns) ? 8 : 0,
     OBSERVED_AT: Math.floor(observedAt / 1000),
-    FLAGS: snapshot.stale ? 1 : 0,
+    FLAGS: (snapshot.stale ? 1 : 0) | (snapshot.cached ? 2 : 0),
     LOCATION: String(snapshot.location || 'ARANET4').slice(0, 31),
     CO2_STATE: co2State(snapshot.current && snapshot.current.co2,
       snapshot.current && snapshot.current.co2State),

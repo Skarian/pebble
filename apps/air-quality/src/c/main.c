@@ -1,5 +1,7 @@
 #include <pebble.h>
 #include <limits.h>
+#include <app_message_client.h>
+#include <stdlib.h>
 
 #define METRICS 4
 #define GRAPH_COLUMNS 56
@@ -8,8 +10,9 @@
 #define CACHE_VERSION 6
 #define PERSIST_KEY_CACHE 4102
 #define UNAVAILABLE INT32_MIN
-#define RESPONSE_TIMEOUT_MS 30000
 #define PROTOCOL_VERSION 2
+#define FLAG_STALE 0x01
+#define FLAG_CACHED 0x02
 
 enum { COMMAND_FETCH = 1, COMMAND_PHONE_READY = 2, COMMAND_SCALE = 3 };
 enum { SCALE_HOUR = 0, SCALE_DAY = 1, SCALE_WEEK = 2, SCALE_COUNT = 3 };
@@ -18,7 +21,7 @@ enum {
   STATUS_OK = 0, STATUS_SETUP = 1, STATUS_COMPANION = 2,
   STATUS_BLUETOOTH = 3, STATUS_PERMISSION = 4, STATUS_SENSOR = 5,
   STATUS_TIMEOUT = 6, STATUS_SERVICE = 7, STATUS_PARTIAL = 8,
-  STATUS_LOADING = 9
+  STATUS_LOADING = 9, STATUS_RESPONSE_TIMEOUT = 10
 };
 
 typedef struct {
@@ -38,17 +41,16 @@ typedef struct {
 
 static Window *s_window;
 static Layer *s_canvas;
-static AppTimer *s_timer;
+static AppMessageClient *s_phone;
 static AirCache s_cache;
 static bool s_has_cache;
 static bool s_loading;
 static bool s_scale_loading;
+static AppMessageClientState s_delivery_state = APP_MESSAGE_CLIENT_IDLE;
 static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
-static uint16_t s_request_id;
 static uint8_t s_scale = DEFAULT_SCALE;
 static uint8_t s_pending_scale = DEFAULT_SCALE;
-static uint8_t s_request_command;
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESSURE"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESSURE"};
@@ -130,45 +132,43 @@ static void draw_header(GContext *ctx, GRect bounds, const char *left, const cha
             GRect(right_x, 0, bounds.size.w - right_x - 8, 28), GTextAlignmentRight, GColorBlack);
 }
 
-static const char *short_error(void) {
-  if (s_status == STATUS_COMPANION) return "OPEN PHONE APP";
-  if (s_status == STATUS_BLUETOOTH) return "BLUETOOTH OFF";
-  if (s_status == STATUS_PERMISSION) return "ALLOW NEARBY DEVICES";
-  if (s_status == STATUS_SENSOR) return "SENSOR NOT FOUND";
-  if (s_status == STATUS_TIMEOUT) return "REFRESH TIMED OUT";
-  if (s_status == STATUS_SERVICE) return "TRY AGAIN";
-  return "";
-}
-
 static void draw_footer(GContext *ctx, GRect bounds) {
   char footer[48];
-  if (s_loading) snprintf(footer, sizeof(footer), "SYNCING...");
-  else if (s_status >= STATUS_COMPANION && s_status <= STATUS_SERVICE)
-    snprintf(footer, sizeof(footer), "%s  SELECT RETRY", short_error());
-  else format_age(footer, sizeof(footer));
+  format_age(footer, sizeof(footer));
   draw_text(ctx, footer, fonts_get_system_font(FONT_KEY_GOTHIC_18),
             GRect(5, bounds.size.h - 22, bounds.size.w - 10, 22),
             GTextAlignmentCenter, GColorBlack);
 }
 
+static bool is_error_status(uint8_t status) {
+  return (status >= STATUS_SETUP && status <= STATUS_SERVICE) ||
+      status == STATUS_RESPONSE_TIMEOUT;
+}
+
 static void draw_state(GContext *ctx, GRect bounds) {
   const char *title = "SYNCING...";
+  if (s_delivery_state == APP_MESSAGE_CLIENT_WAITING_READY) title = "CONNECTING...";
+  else if (s_delivery_state == APP_MESSAGE_CLIENT_BACKING_OFF) title = "RETRYING...";
+  else if (s_delivery_state == APP_MESSAGE_CLIENT_WAITING_OUTBOX) title = "SENDING...";
   const char *body = "";
   const char *footer = "";
   if (s_status == STATUS_SETUP) {
-    title = "SETUP REQUIRED"; body = "Open AirQuality on phone\nand choose your sensor";
+    title = "SETUP REQUIRED"; body = "Choose your sensor\nin AirQuality on phone";
+    footer = "SELECT WHEN READY";
   } else if (s_status == STATUS_COMPANION) {
-    title = "OPEN PHONE APP"; body = "AirQuality companion\nis not ready"; footer = "PRESS SELECT TO RETRY";
+    title = "PHONE OFFLINE"; body = "Open AirQuality on phone"; footer = "PRESS SELECT TO RETRY";
   } else if (s_status == STATUS_BLUETOOTH) {
     title = "BLUETOOTH OFF"; body = "Turn on Bluetooth"; footer = "PRESS SELECT TO RETRY";
   } else if (s_status == STATUS_PERMISSION) {
-    title = "PERMISSION NEEDED"; body = "Allow nearby devices\nin AirQuality"; footer = "PRESS SELECT TO RETRY";
+    title = "PERMISSION NEEDED"; body = "Allow Nearby Devices\nin AirQuality"; footer = "PRESS SELECT TO RETRY";
   } else if (s_status == STATUS_SENSOR) {
     title = "SENSOR NOT FOUND"; body = "Keep Aranet4 nearby"; footer = "PRESS SELECT TO RETRY";
   } else if (s_status == STATUS_TIMEOUT) {
-    title = "REFRESH TIMED OUT"; body = "Keep phone and sensor nearby"; footer = "PRESS SELECT TO RETRY";
+    title = "SENSOR TIMED OUT"; body = "Keep Aranet4 nearby"; footer = "PRESS SELECT TO RETRY";
   } else if (s_status == STATUS_SERVICE) {
-    title = "TRY AGAIN"; body = "Open AirQuality on phone"; footer = "PRESS SELECT TO RETRY";
+    title = "SERVICE ERROR"; body = "Open AirQuality on phone"; footer = "PRESS SELECT TO RETRY";
+  } else if (s_status == STATUS_RESPONSE_TIMEOUT) {
+    title = "SYNC TIMED OUT"; body = "No reply from phone"; footer = "PRESS SELECT TO RETRY";
   }
   draw_header(ctx, bounds, "AIRQUALITY", "");
   bool title_only = body[0] == '\0' && footer[0] == '\0';
@@ -352,45 +352,53 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-  if (s_loading) draw_state(ctx, bounds);
-  else if (s_status >= STATUS_SETUP && s_status <= STATUS_SERVICE) draw_state(ctx, bounds);
+  if (s_loading || is_error_status(s_status)) draw_state(ctx, bounds);
   else if (!s_has_cache) draw_state(ctx, bounds);
   else if (s_page == 0) draw_current(ctx, bounds);
   else draw_chart(ctx, bounds);
 }
 
-static void refresh_timeout(void *context) {
-  s_timer = NULL;
-  if (s_scale_loading) {
-    s_scale_loading = false;
-    return;
-  }
-  s_loading = false; s_status = STATUS_TIMEOUT;
-  layer_mark_dirty(s_canvas);
+static DictionaryResult write_request(
+    DictionaryIterator *iter,
+    const AppMessageClientStatus *request,
+    void *context) {
+  (void)context;
+  return dict_write_uint8(iter, MESSAGE_KEY_SCALE,
+      request->operation == COMMAND_SCALE ? s_pending_scale : s_scale);
+}
+
+static void phone_state_changed(
+    const AppMessageClientStatus *status,
+    void *context) {
+  (void)context;
+  s_delivery_state = status->state;
+  if (s_canvas) layer_mark_dirty(s_canvas);
+}
+
+static void phone_request_failed(
+    const AppMessageFailureInfo *failure,
+    void *context) {
+  (void)context;
+  s_loading = false;
+  s_scale_loading = false;
+  s_status = failure->failure == APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT
+      ? STATUS_RESPONSE_TIMEOUT : STATUS_COMPANION;
+  if (s_canvas) layer_mark_dirty(s_canvas);
 }
 
 static void request_data(uint8_t command) {
-  if (s_loading || s_scale_loading) return;
-  DictionaryIterator *iter;
-  if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
-    if (command == COMMAND_SCALE) return;
-    s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas); return;
-  }
-  s_request_id++;
-  s_request_command = command;
-  dict_write_uint8(iter, MESSAGE_KEY_PROTOCOL, PROTOCOL_VERSION);
-  dict_write_uint8(iter, MESSAGE_KEY_COMMAND, command);
-  dict_write_uint16(iter, MESSAGE_KEY_REQUEST_ID, s_request_id);
-  dict_write_uint8(iter, MESSAGE_KEY_SCALE,
-                   command == COMMAND_SCALE ? s_pending_scale : s_scale);
-  if (app_message_outbox_send() != APP_MSG_OK) {
-    if (command == COMMAND_SCALE) return;
-    s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas); return;
-  }
+  if (app_message_client_is_active(s_phone)) return;
   if (command == COMMAND_SCALE) s_scale_loading = true;
   else { s_loading = true; s_status = STATUS_LOADING; }
-  if (s_timer) app_timer_cancel(s_timer);
-  s_timer = app_timer_register(RESPONSE_TIMEOUT_MS, refresh_timeout, NULL);
+  AppMessageStartResult result = app_message_client_start(
+      s_phone, command, APP_MESSAGE_OPERATION_READ,
+      NULL, APP_MESSAGE_SEND_PRIMARY);
+  if (result != APP_MESSAGE_START_STARTED &&
+      result != APP_MESSAGE_START_COALESCED) {
+    s_loading = false;
+    s_scale_loading = false;
+    s_status = STATUS_COMPANION;
+  }
   layer_mark_dirty(s_canvas);
 }
 
@@ -401,44 +409,54 @@ static int32_t tuple_i32(DictionaryIterator *iter, uint32_t key, int32_t fallbac
   return tuple ? tuple->value->int32 : fallback;
 }
 
-static void inbox_received(DictionaryIterator *iter, void *context) {
+static AppMessageResponseAction receive_response(
+    DictionaryIterator *iter,
+    const AppMessageClientStatus *request,
+    void *context) {
+  (void)context;
   Tuple *protocol = dict_find(iter, MESSAGE_KEY_PROTOCOL);
-  if (!protocol || protocol->value->uint8 != PROTOCOL_VERSION) return;
-  Tuple *command = dict_find(iter, MESSAGE_KEY_COMMAND);
-  if (command && command->value->uint8 == COMMAND_PHONE_READY) {
-    if (s_loading) {
-      if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
-      s_loading = false;
-      request_refresh();
-    }
-    return;
+  if (!protocol || protocol->value->uint8 != PROTOCOL_VERSION) {
+    return APP_MESSAGE_RESPONSE_IGNORE;
   }
   Tuple *status = dict_find(iter, MESSAGE_KEY_STATUS);
-  if (!status) return;
-  Tuple *request = dict_find(iter, MESSAGE_KEY_REQUEST_ID);
-  if (!request || request->value->uint16 != s_request_id) return;
-  if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
-  bool scale_response = s_request_command == COMMAND_SCALE;
-  s_scale_loading = false;
-  s_loading = false;
+  if (!status) return APP_MESSAGE_RESPONSE_IGNORE;
+  bool scale_response = request->operation == COMMAND_SCALE;
+  bool cached_progress = false;
   s_status = status->value->uint8;
   if (scale_response && s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
-    s_status = STATUS_OK;
-    return;
+    s_scale_loading = false;
+    s_loading = false;
+    s_pending_scale = s_scale;
+    layer_mark_dirty(s_canvas);
+    return APP_MESSAGE_RESPONSE_DONE;
   }
   if (s_status == STATUS_OK || s_status == STATUS_PARTIAL) {
     Tuple *observed = dict_find(iter, MESSAGE_KEY_OBSERVED_AT);
     Tuple *location = dict_find(iter, MESSAGE_KEY_LOCATION);
     if (!observed || !location || !dict_find(iter, MESSAGE_KEY_CO2)) {
-      if (scale_response) { s_status = STATUS_OK; return; }
-      s_status = STATUS_SERVICE; layer_mark_dirty(s_canvas); return;
+      s_scale_loading = false;
+      s_loading = false;
+      if (scale_response) s_pending_scale = s_scale;
+      s_status = STATUS_SERVICE;
+      layer_mark_dirty(s_canvas);
+      return APP_MESSAGE_RESPONSE_DONE;
     }
+    uint8_t response_flags = (uint8_t)tuple_i32(iter, MESSAGE_KEY_FLAGS, 0);
+    cached_progress = !scale_response && (response_flags & FLAG_CACHED);
     if (s_has_cache && observed->value->uint32 < s_cache.observed_at) {
-      s_status = STATUS_OK; layer_mark_dirty(s_canvas); return;
+      if (cached_progress) {
+        s_loading = true;
+      } else {
+        s_loading = false;
+        s_scale_loading = false;
+      }
+      s_status = STATUS_OK;
+      layer_mark_dirty(s_canvas);
+      return cached_progress ? APP_MESSAGE_RESPONSE_MORE : APP_MESSAGE_RESPONSE_DONE;
     }
     AirCache next;
     memset(&next, 0, sizeof(next)); next.version = CACHE_VERSION;
-    next.flags = (uint8_t)tuple_i32(iter, MESSAGE_KEY_FLAGS, 0);
+    next.flags = response_flags;
     next.co2_state = (uint8_t)tuple_i32(iter, MESSAGE_KEY_CO2_STATE, 0);
     int32_t battery = tuple_i32(iter, MESSAGE_KEY_BATTERY, 255);
     next.battery = battery >= 0 && battery <= 100 ? (uint8_t)battery : 255;
@@ -474,30 +492,33 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       }
     }
     if (!chart_valid) {
-      if (scale_response) { s_status = STATUS_OK; return; }
-      s_status = STATUS_SERVICE; layer_mark_dirty(s_canvas); return;
+      s_scale_loading = false;
+      s_loading = false;
+      if (scale_response) s_pending_scale = s_scale;
+      s_status = STATUS_SERVICE;
+      layer_mark_dirty(s_canvas);
+      return APP_MESSAGE_RESPONSE_DONE;
     }
     s_cache = next; s_has_cache = true;
     persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
+    if (cached_progress) {
+      s_loading = true;
+      s_scale_loading = false;
+    } else {
+      s_loading = false;
+      s_scale_loading = false;
+    }
+  } else {
+    s_loading = false;
+    s_scale_loading = false;
   }
   layer_mark_dirty(s_canvas);
-}
-
-static void inbox_dropped(AppMessageResult reason, void *context) {
-  if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
-  if (s_scale_loading) { s_scale_loading = false; return; }
-  s_loading = false; s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas);
-}
-
-static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
-  if (s_timer) { app_timer_cancel(s_timer); s_timer = NULL; }
-  if (s_scale_loading) { s_scale_loading = false; return; }
-  s_loading = false; s_status = STATUS_COMPANION; layer_mark_dirty(s_canvas);
+  return cached_progress ? APP_MESSAGE_RESPONSE_MORE : APP_MESSAGE_RESPONSE_DONE;
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
   if (s_loading || s_scale_loading) return;
-  if (s_status >= STATUS_SETUP && s_status <= STATUS_SERVICE) {
+  if (is_error_status(s_status)) {
     request_refresh();
   } else if (s_page == 0) {
     request_refresh();
@@ -538,17 +559,36 @@ static void init(void) {
   window_set_background_color(s_window, GColorWhite);
   window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
   window_set_click_config_provider(s_window, click_config);
-  app_message_register_inbox_received(inbox_received);
-  app_message_register_inbox_dropped(inbox_dropped);
-  app_message_register_outbox_failed(outbox_failed);
-  app_message_open(2048, 64);
+  AppMessageClientConfig phone_config = {
+    .app_name = "air-quality",
+    .inbox_size = 2048,
+    .outbox_size = 64,
+    .protocol = {
+      .protocol_key = MESSAGE_KEY_PROTOCOL,
+      .command_key = MESSAGE_KEY_COMMAND,
+      .request_id_key = MESSAGE_KEY_REQUEST_ID,
+      .protocol_version = PROTOCOL_VERSION,
+      .ready_command = COMMAND_PHONE_READY,
+      .request_id_codec = APP_MESSAGE_ID_UINT16,
+    },
+    .write_payload = write_request,
+    .response_received = receive_response,
+    .state_changed = phone_state_changed,
+    .request_failed = phone_request_failed,
+  };
+  AppMessageResult open_result;
+  s_phone = app_message_client_open(&phone_config, &open_result);
   window_stack_push(s_window, true);
-  request_refresh();
+  if (open_result == APP_MSG_OK) request_refresh();
+  else {
+    s_loading = false;
+    s_status = STATUS_COMPANION;
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void deinit(void) {
-  if (s_timer) app_timer_cancel(s_timer);
-  app_message_deregister_callbacks();
+  app_message_client_close(s_phone);
   window_destroy(s_window);
 }
 

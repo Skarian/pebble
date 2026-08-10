@@ -64,8 +64,8 @@ class AirQualityDailySync(context: Context, parameters: WorkerParameters) :
         history.onSuccess { readings ->
             ReadingStore(applicationContext).use { it.saveAll(readings) }
             Log.i(LOG_TAG, "Daily sync repaired missing history")
-        }.onFailure { error ->
-            Log.w(LOG_TAG, "Daily sync history repair failed: ${error.message}")
+        }.onFailure {
+            Log.w(LOG_TAG, "Daily sync history repair failed")
         }
         return Result.success()
     }
