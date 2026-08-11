@@ -20,7 +20,9 @@ function fakeXhr(scenarios, requests) {
     constructor() {
       this.headers = {};
       this.status = 0;
+      this.statusText = '';
       this.responseText = '';
+      this.responseHeaders = '';
     }
     open(method, url) {
       this.method = method;
@@ -29,6 +31,7 @@ function fakeXhr(scenarios, requests) {
     setRequestHeader(name, value) {
       this.headers[name] = value;
     }
+    getAllResponseHeaders() { return this.responseHeaders; }
     send(body) {
       requests.push({method: this.method, url: this.url, headers: this.headers, body});
       const scenario = scenarios.shift();
@@ -39,9 +42,11 @@ function fakeXhr(scenarios, requests) {
   };
 }
 
-function complete(status, body) {
+function complete(status, body, metadata = {}) {
   return (xhr) => {
     xhr.status = status;
+    xhr.statusText = metadata.statusText || '';
+    xhr.responseHeaders = metadata.headers || '';
     xhr.responseText = typeof body === 'function' ? body(xhr) : body;
     xhr.onload();
     if (xhr.onloadend) xhr.onloadend();
@@ -117,11 +122,15 @@ test('valid cached token skips repeated credential login', async () => {
 
 test('authentication failures are controlled and are not retried', async () => {
   const requests = [];
+  const captured = [];
   const Xhr = fakeXhr([
     complete(401, JSON.stringify({errorCode: 'E0000004', errorSummary: 'do not expose me'}))
   ], requests);
   const client = createClient(Xhr, memoryStorage(), {
     requestTimeoutMs: 0,
+    reportError: (error, whileDoing, secrets) => captured.push({
+      name: error.name, body: error.body, stack: error.stack, whileDoing, secrets,
+    }),
     retryDelay: () => assert.fail('auth failure must not retry')
   });
   const result = await fetchRecords(client);
@@ -129,6 +138,11 @@ test('authentication failures are controlled and are not retried', async () => {
   assert.equal(result.error.message, 'ResMed sign-in failed');
   assert.equal(JSON.stringify(result).includes('do not expose me'), false);
   assert.equal(requests.length, 1);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].name, 'ResMedHttpError');
+  assert.match(captured[0].body, /do not expose me/);
+  assert.match(captured[0].stack, /ResMedHttpError/);
+  assert.ok(captured[0].secrets.includes('secret'));
 });
 
 test('one transient network failure retries the whole operation once', async () => {
@@ -151,22 +165,32 @@ test('one transient network failure retries the whole operation once', async () 
 
 test('rejected one-time authorization code restarts the full flow once', async () => {
   const requests = [];
+  const captured = [];
   let delays = 0;
   const Xhr = fakeXhr([
     ...successFlow([]).slice(0, 2),
     complete(400, JSON.stringify({
       error: 'invalid_grant', error_description: 'private upstream detail'
-    })),
+    }), {statusText: 'Bad Request', headers: 'x-request-id: token-exchange-17'}),
     ...successFlow([])
   ], requests);
   const client = createClient(Xhr, memoryStorage(), {
     requestTimeoutMs: 0,
+    reportError: (error) => captured.push({
+      name: error.name, status: error.status, statusText: error.statusText,
+      headers: error.headers, code: error.code, body: error.body,
+    }),
     retryDelay: (callback) => { delays += 1; callback(); }
   });
   const result = await fetchRecords(client);
   assert.equal(result.error, null);
   assert.equal(delays, 1);
   assert.equal(requests.length, 7);
+  assert.deepEqual(captured, [{
+    name: 'ResMedHttpError', status: 400, code: 'invalid_grant',
+    statusText: 'Bad Request', headers: 'x-request-id: token-exchange-17',
+    body: '{"error":"invalid_grant","error_description":"private upstream detail"}',
+  }]);
 });
 
 test('OAuth state mismatch is rejected before token exchange', async () => {
@@ -179,19 +203,27 @@ test('OAuth state mismatch is rejected before token exchange', async () => {
   const result = await fetchRecords(client);
   assert.equal(result.error.type, 'auth');
   assert.equal(result.error.message, 'ResMed authorization failed');
-  assert.equal(result.error.replay, 'parse:authorization:missing-or-mismatched-code');
   assert.equal(requests.length, 2);
 });
 
-test('service failures carry a durable replay recipe without response contents', async () => {
+test('service failures retain the source error envelope without health data', async () => {
   const requests = [];
+  const captured = [];
   const Xhr = fakeXhr([
     ...successFlow([]).slice(0, 3),
-    complete(503, JSON.stringify({code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'})),
-    complete(503, JSON.stringify({code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'}))
+    complete(503, JSON.stringify({data: {sleepScore: 92},
+      code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'}),
+      {statusText: 'Service Unavailable', headers: 'retry-after: 4'}),
+    complete(503, JSON.stringify({data: {sleepScore: 92},
+      code: 'UPSTREAM_UNAVAILABLE', error: 'private upstream detail'}),
+      {statusText: 'Service Unavailable', headers: 'retry-after: 4'})
   ], requests);
   const client = createClient(Xhr, memoryStorage(), {
     requestTimeoutMs: 0,
+    reportError: (error, whileDoing) => captured.push({
+      name: error.name, body: error.body, code: error.code,
+      statusText: error.statusText, headers: error.headers, whileDoing,
+    }),
     retryDelay: (callback) => callback()
   });
   const result = await fetchRecords(client);
@@ -199,19 +231,57 @@ test('service failures carry a durable replay recipe without response contents',
   assert.equal(result.error.status, 503);
   assert.equal(result.error.attempts, 2);
   assert.equal(result.error.code, 'UPSTREAM_UNAVAILABLE');
-  assert.equal(result.error.replay, 'http:sleep-records:503');
-  assert.equal(result.error.previous.replay, 'http:sleep-records:503');
-  assert.match(result.error.shape, /error:string/);
   assert.doesNotMatch(JSON.stringify(result.error), /private upstream detail/);
+  assert.equal(captured.length, 2);
+  assert.ok(captured.every(({name}) => name === 'ResMedHttpError'));
+  assert.ok(captured.every(({body}) => body ===
+    '{"code":"UPSTREAM_UNAVAILABLE","error":"private upstream detail"}'));
+  assert.doesNotMatch(JSON.stringify(captured), /sleepScore|92/);
+  assert.ok(captured.every(({code}) => code === 'UPSTREAM_UNAVAILABLE'));
+  assert.ok(captured.every(({statusText}) => statusText === 'Service Unavailable'));
+  assert.ok(captured.every(({headers}) => headers === 'retry-after: 4'));
 });
 
-test('invalid sleep payload records its safe structural fingerprint', async () => {
+test('invalid sleep payload removes only the health-bearing data field', async () => {
   const requests = [];
+  const captured = [];
   const Xhr = fakeXhr([
     ...successFlow([]).slice(0, 3),
     complete(200, JSON.stringify({data: {getPatientWrapper: {sleepRecords: {items: null}}}}))
   ], requests);
-  const result = await fetchRecords(createClient(Xhr, memoryStorage(), {requestTimeoutMs: 0}));
-  assert.equal(result.error.replay, 'parse:sleep-records:missing-items');
-  assert.match(result.error.shape, /items=object/);
+  const result = await fetchRecords(createClient(Xhr, memoryStorage(), {
+    requestTimeoutMs: 0,
+    reportError: (error) => captured.push({name: error.name, body: error.body}),
+  }));
+  assert.equal(result.error.type, 'service');
+  assert.equal(captured[0].name, 'ResMedResponseError');
+  assert.equal(captured[0].body, '{}');
+});
+
+test('malformed sleep JSON retains source metadata but never ambiguous health bytes', async () => {
+  const requests = [];
+  const captured = [];
+  const privateBody = '{"data":{"sleepScore":92,"ahi":3.2,"totalUsage":456';
+  const Xhr = fakeXhr([
+    ...successFlow([]).slice(0, 3),
+    complete(200, privateBody)
+  ], requests);
+  const result = await fetchRecords(createClient(Xhr, memoryStorage(), {
+    requestTimeoutMs: 0,
+    reportError: (error, whileDoing) => captured.push({
+      name: error.name, message: error.message, status: error.status,
+      step: error.step, body: error.body, whileDoing,
+    }),
+  }));
+
+  assert.equal(result.error.type, 'service');
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].name, 'SyntaxError');
+  assert.match(captured[0].message, /JSON/);
+  assert.equal(captured[0].status, 200);
+  assert.equal(captured[0].step, 'sleep records');
+  assert.equal(captured[0].whileDoing, 'parsing the ResMed sleep records response');
+  assert.match(captured[0].body,
+    new RegExp('^\\[unparseable sleep response; bytes=' + privateBody.length + '\\]$'));
+  assert.doesNotMatch(JSON.stringify(captured), /sleepScore|totalUsage|92|456/);
 });

@@ -19,6 +19,11 @@ test('also accepts legacy encoded and hash-prefixed settings responses', () => {
 });
 
 test('rejects empty and malformed responses', () => {
+  const captured = [];
   assert.equal(decode(''), null);
-  assert.equal(decode('%not-valid-json'), null);
+  assert.equal(decode('%not-valid-json', (error, whileDoing) =>
+    captured.push({error, whileDoing})), null);
+  assert.equal(captured[0].error.name, 'SettingsResponseError');
+  assert.equal(captured[0].error.rawCause.name, 'SyntaxError');
+  assert.match(captured[0].error.message, /URI malformed/);
 });

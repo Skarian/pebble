@@ -29,6 +29,9 @@ function timers() {
       }
       return false;
     },
+    nextDelay() {
+      return pending.find((timer) => !timer.cancelled)?.delay ?? null;
+    },
     flush() {
       let count = 0;
       while (this.runNext()) {
@@ -37,14 +40,6 @@ function timers() {
       }
     },
     size() { return pending.filter((timer) => !timer.cancelled).length; },
-  };
-}
-
-function memoryStorage() {
-  const values = new Map();
-  return {
-    getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, String(value)),
   };
 }
 
@@ -79,13 +74,17 @@ test('immediate and asynchronous failures retry the unchanged dictionary', () =>
   const seen = [];
   let attempt = 0;
   let outcome;
+  const errors = [];
+  const thrown = new TypeError('private detail');
+  const callbackFailure = {code: 'SEND_TIMEOUT', payload: 'secret'};
   const appMessages = session((dictionary, ok, fail) => {
     seen.push(dictionary);
     attempt += 1;
-    if (attempt === 1) throw new TypeError('private detail');
-    if (attempt === 2) fail({code: 'SEND_TIMEOUT', payload: 'secret'});
+    if (attempt === 1) throw thrown;
+    if (attempt === 2) fail(callbackFailure);
     else ok();
-  }, {setTimer: clock.setTimer, clearTimer: clock.clearTimer});
+  }, {setTimer: clock.setTimer, clearTimer: clock.clearTimer,
+    errorReporter: {report: (error, whileDoing) => errors.push({error, whileDoing})}});
 
   appMessages.send(message, {operation: 'fetch', requestId: 41},
     (result) => { outcome = result; });
@@ -94,11 +93,11 @@ test('immediate and asynchronous failures retry the unchanged dictionary', () =>
   assert.deepEqual(seen, [message, message, message]);
   assert.deepEqual(outcome, {ok: true, attempts: 3,
     resultClass: 'ack', resultCode: ''});
-  const incidents = JSON.parse(appMessages.report()).events;
-  assert.equal(incidents.filter((entry) => entry.event === 'delivery_retry').length, 2);
-  assert.equal(incidents.some((entry) => entry.event === 'delivery_success'), false);
-  assert.ok(incidents.every((entry) => entry.part === 0));
-  assert.doesNotMatch(appMessages.report(), /private detail|payload|secret/);
+  assert.equal(errors.length, 2);
+  assert.equal(errors[0].error, thrown);
+  assert.equal(errors[1].error, callbackFailure);
+  assert.ok(errors.every((entry) =>
+    entry.whileDoing === 'sending an AppMessage for fetch'));
 });
 
 test('a failed batch item retries in place and another send cannot interleave', () => {
@@ -133,6 +132,7 @@ test('a missing callback times out, ignores its late callback, and releases the 
   const order = [];
   let lateSuccess;
   let outcome;
+  const errors = [];
   const appMessages = session((message, ok) => {
     order.push(message.PART);
     if (message.PART === 1) {
@@ -143,6 +143,7 @@ test('a missing callback times out, ignores its late callback, and releases the 
   }, {
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
+    errorReporter: {report: (error) => errors.push(error)},
   });
 
   appMessages.send({PART: 1}, {operation: 'fetch', requestId: 51},
@@ -156,8 +157,97 @@ test('a missing callback times out, ignores its late callback, and releases the 
   assert.deepEqual(order, [1, 1, 1, 2]);
   assert.equal(outcome.ok, false);
   assert.equal(outcome.resultClass, 'callback_timeout');
-  assert.equal(JSON.parse(appMessages.report()).events
-    .filter((entry) => entry.event === 'delivery_retry').length, 2);
+  assert.equal(errors.filter((error) => error.name === 'AppMessageTimeoutError').length, 3);
+  assert.ok(errors.every((error) => error.code === 'CALLBACK_TIMEOUT'));
+});
+
+test('watch errors import durably before a private idle-only ACK', () => {
+  const clock = timers();
+  const sent = [];
+  const events = [];
+  const routed = [];
+  let releaseBusiness;
+  const pebble = fakePebble((message, ok) => {
+    sent.push(message);
+    if (message.PART === 1) releaseBusiness = ok;
+    else {
+      if (message.ERROR_COMMAND === 2) events.push(`ack:${message.ERROR_SEQUENCE}`);
+      ok();
+    }
+  });
+  const appMessages = session(pebble.sendAppMessage, {
+    pebble,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    errorReporter: {
+      report() {},
+      importWatch(payload) {
+        events.push(`import:${payload.ERROR_SEQUENCE}`);
+        return payload.ERROR_SEQUENCE === 9;
+      },
+    },
+    onMessage: (payload) => routed.push(payload),
+  });
+
+  appMessages.send({PART: 1}, {operation: 'fetch', requestId: 5});
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_SEQUENCE: 9,
+    ERROR_GENERATION: 7}});
+  assert.deepEqual(sent, [{PART: 1}]);
+
+  releaseBusiness();
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_SEQUENCE: 8,
+    ERROR_GENERATION: 7}});
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_SEQUENCE: 9,
+    ERROR_GENERATION: 7}});
+  pebble.emit('appmessage', {payload: {COMMAND: 7}});
+
+  assert.deepEqual(events, ['import:9', 'import:8', 'import:9', 'ack:9']);
+  assert.deepEqual(sent, [{PART: 1},
+    {ERROR_COMMAND: 2, ERROR_GENERATION: 7, ERROR_SEQUENCE: 9}]);
+  assert.deepEqual(routed, [{COMMAND: 7}]);
+});
+
+test('diagnostic ACK callback failure, timeout, and throw release queued business', () => {
+  const clock = timers();
+  const sent = [], errors = [], logs = [];
+  const callbackFailure = {code: 'APP_MSG_BUSY'};
+  const thrown = new Error('diagnostic transport threw');
+  let pendingAck, lateSuccess;
+  const pebble = fakePebble((message, ok, fail) => {
+    sent.push(message);
+    if (message.ERROR_SEQUENCE === 1) pendingAck = {ok, fail};
+    else if (message.ERROR_SEQUENCE === 2) lateSuccess = ok;
+    else if (message.ERROR_SEQUENCE === 3) throw thrown;
+    else ok();
+  });
+  const appMessages = session(pebble.sendAppMessage, {pebble,
+    setTimer: clock.setTimer, clearTimer: clock.clearTimer,
+    errorReporter: {report: (error) => errors.push(error), importWatch: () => true},
+    log: (...args) => logs.push(args)});
+
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_GENERATION: 1,
+    ERROR_SEQUENCE: 1}});
+  appMessages.send({PART: 1}, {operation: 'fetch'});
+  pendingAck.fail(callbackFailure);
+
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_GENERATION: 1,
+    ERROR_SEQUENCE: 2}});
+  appMessages.send({PART: 2}, {operation: 'fetch'});
+  assert.equal(clock.nextDelay(), 500);
+  clock.runNext();
+  lateSuccess();
+
+  pebble.emit('appmessage', {payload: {ERROR_COMMAND: 1, ERROR_GENERATION: 1,
+    ERROR_SEQUENCE: 3}});
+  appMessages.send({PART: 3}, {operation: 'fetch'});
+
+  assert.deepEqual(sent.map((message) => message.ERROR_SEQUENCE || message.PART),
+    [1, 1, 2, 2, 3, 3]);
+  assert.deepEqual(errors, []);
+  assert.equal(logs.length, 3);
+  assert.equal(logs[0][1], callbackFailure);
+  assert.equal(logs[1][1].code, 'CALLBACK_TIMEOUT');
+  assert.equal(logs[2][1], thrown);
 });
 
 test('unsupported dictionary values fail without transport and callbacks cannot wedge sends', () => {
@@ -224,7 +314,10 @@ test('one read coalesces, fans out IDs, rejects conflicts, and replays exact IDs
   const replies = [];
   let finish;
   let runs = 0;
-  const appMessages = session((message, ok) => { replies.push(message); ok(); });
+  const errors = [];
+  const appMessages = session((message, ok) => { replies.push(message); ok(); }, {
+    errorReporter: {report: (error) => errors.push(error)},
+  });
   function run(requestId, done) {
     assert.equal(requestId, 10);
     runs += 1;
@@ -249,50 +342,29 @@ test('one read coalesces, fans out IDs, rejects conflicts, and replays exact IDs
     {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 11},
     {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 10},
   ]);
-  const eventNames = JSON.parse(appMessages.report()).events.map((entry) => entry.event);
-  assert.ok(eventNames.includes('read_conflict'));
-  assert.equal(eventNames.includes('read_coalesced'), false);
-  assert.equal(eventNames.includes('read_joined'), false);
-  assert.equal(eventNames.includes('response_replayed'), false);
+  assert.deepEqual(errors.map((error) => error.code),
+    ['read_invalid', 'read_invalid', 'read_conflict']);
 });
 
-test('only bounded fault incidents survive restart and reveal no sensitive values', () => {
-  const storage = memoryStorage();
-  storage.setItem('pebble.appmessage.cpap.v1', JSON.stringify([
-    {operation: 'ready', event: 'lifecycle_ready', finalCategory: ''},
-    {operation: 'fetch', requestId: 7, event: 'delivery_failure',
-      resultClass: 'callback_failure', finalCategory: 'delivery'},
-    {operation: 'fetch', requestId: 7, event: 'delivery_success', finalCategory: 'ok'},
-  ]));
+test('AppMessage reports source failures but owns no diagnostic journal', () => {
+  const errors = [];
   const replies = [];
-  const first = session((message, ok) => { replies.push(message); ok(); },
-    {storage, now: () => 123});
+  const appMessages = session((message, ok) => { replies.push(message); ok(); }, {
+    errorReporter: {report: (error, whileDoing) => errors.push({error, whileDoing})},
+  });
 
-  for (let index = 0; index < 35; index += 1) {
-    first.record({operation: 'probe', event: 'domain_failure', requestId: index + 1,
-      status: index, finalCategory: 'probe_failure'});
-  }
-  first.record({operation: 'probe', event: 'probe_succeeded', finalCategory: 'ok'});
-  first.record({operation: 'refresh', event: 'domain_terminal', requestId: 'request-1',
-    step: 'sleep records', status: 503, resultCode: 'HTTP_503',
-    finalCategory: 'resmed_service', password: 'secret', responseBody: 'private'});
-  first.handleRead('request-2', 'fetch', () => {
-    throw new Error('token must stay private');
+  assert.equal(appMessages.send({VALUE: true}, {operation: 'invalid'}), false);
+  appMessages.handleRead('request-2', 'fetch', () => {
+    throw new Error('upstream callback failed');
   }, {failureResponse: () => ({PROTOCOL: 1, STATUS: 4})});
-  first.handleRead('request-2', 'fetch', () => {}, {});
-
-  const second = session((message, ok) => ok(), {storage, now: () => 456});
-  const report = second.report();
-  const logged = [];
-  second.replayLog((line) => logged.push(line));
+  appMessages.handleRead('request-2', 'fetch', () => {}, {});
 
   assert.deepEqual(replies, [
     {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 'request-2'},
     {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 'request-2'},
   ]);
-  assert.equal(JSON.parse(report).events.length, 32);
-  assert.match(report, /phone_runtime|request-2/);
-  assert.match(logged[0], /^CPAP_APPMESSAGE /);
-  assert.doesNotMatch(report, /lifecycle_ready|delivery_success|probe_succeeded/);
-  assert.doesNotMatch(report, /secret|private|password|responseBody|token must stay private/);
+  assert.deepEqual(Object.keys(appMessages).sort(),
+    ['announceReady', 'handleRead', 'open', 'send']);
+  assert.ok(errors.some((entry) => entry.error.code === 'invalid_dictionary_value'));
+  assert.ok(errors.some((entry) => entry.error.message === 'upstream callback failed'));
 });

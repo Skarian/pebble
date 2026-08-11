@@ -56,10 +56,8 @@ Fixtures live only in the QA driver and are never compiled into the PBW.
 
 The production artifact is `build/agents.pbw`.
 
-## Connection diagnostics
+## Optional error reporting
 
-The watch emits payload-free AppMessage logs; the Android companion keeps the
-newest 64 fault incidents (not routine successes) and exposes **Copy connection
-diagnostics**. Retrieval
-commands and the redaction contract are in
-[`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).
+The Android companion can opt in to source-error reporting for both the phone
+and watch. Configuration and server-query instructions are in
+[`../../docs/error-reporting.md`](../../docs/error-reporting.md).

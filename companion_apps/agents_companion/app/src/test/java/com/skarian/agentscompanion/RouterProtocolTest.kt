@@ -203,12 +203,7 @@ class RouterProtocolTest {
     }
 
     @Test
-    fun `terminal domain categories are categorical and redact router payloads`() {
-        assertEquals("ok", routerTerminalCategory(PhoneEvent.COMPLETED))
-        assertEquals("status_unknown", routerTerminalCategory(PhoneEvent.STATUS_UNKNOWN))
-        assertEquals("agent_failed", routerTerminalCategory(PhoneEvent.FAILED))
-        assertEquals(null, routerTerminalCategory(PhoneEvent.COMMENTARY))
-
+    fun `agent refresh result categories do not expose router payloads`() {
         fun stored(stdout: String, exitCode: Int = 0) = StoredResult(
             "refresh-3", TermuxCommandRunner.KIND_AGENTS, null, stdout,
             "private stderr", exitCode, 0, "private error",
@@ -222,6 +217,27 @@ class RouterProtocolTest {
         assertEquals(null, invalid.agents)
         assertFalse(invalid.toString().contains("secret@example.com"))
         assertTrue(invalid.category.matches(Regex("[a-z_]+")))
+    }
+
+    @Test
+    fun `agent refresh reports the original parser and Termux failures`() {
+        val reported = mutableListOf<Any>()
+        val invalid = StoredResult(
+            "refresh-4", TermuxCommandRunner.KIND_AGENTS, null, "not json",
+            "", 0, 0, "",
+        )
+        val failed = invalid.copy(stdout = "", stderr = "socket failed", exitCode = 17, errorCode = 4)
+
+        parseAgentRefresh(invalid, reported::add)
+        parseAgentRefresh(failed, reported::add)
+
+        assertTrue(reported[0] is org.json.JSONException)
+        val execution = reported[1] as TermuxExecutionError
+        assertEquals(17, execution.exitCode)
+        assertEquals(4, execution.errorCode)
+        assertEquals(TermuxCommandRunner.KIND_AGENTS, execution.kind)
+        assertEquals("", execution.standardOutput)
+        assertEquals("socket failed", execution.standardError)
     }
 
     @Test(expected = IllegalArgumentException::class)

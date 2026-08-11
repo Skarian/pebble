@@ -125,7 +125,10 @@ async function main() {
     if (!readFileSync(coldSyncing.path).equals(readFileSync(cachedSyncing.path))) {
       throw new Error('Cached response changed the stable syncing screen');
     }
-    await capture('SYNC TIMED OUT AFTER CACHE', status(10, requestId));
+    // STATUS_RESPONSE_TIMEOUT is watch-local, not part of the companion's
+    // accepted wire statuses. Exercise the coordinator's three same-ID read
+    // attempts so this state cannot be faked by an invalid phone response.
+    await capture('SYNC TIMED OUT AFTER CACHE', null, [], {waitMs: 93000});
 
     requestId += 1;
     await capture('PHONE OFFLINE AFTER CACHE', status(2, requestId), ['select']);

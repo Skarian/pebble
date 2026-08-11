@@ -1,165 +1,96 @@
 'use strict';
 
+var DIAGNOSTIC_ACK_TIMEOUT_MS = 500;
+
 function createAppMessageSession(options) {
   options = options || {};
   var pebble = options.pebble;
   if (!pebble || typeof pebble.sendAppMessage !== 'function' ||
-      typeof pebble.addEventListener !== 'function') {
-    throw new TypeError('pebble is required');
-  }
+      typeof pebble.addEventListener !== 'function') throw new TypeError('pebble is required');
 
-  var transport = function (dictionary, success, failure) {
-    pebble.sendAppMessage(dictionary, success, failure);
-  };
+  var transport = function (dictionary, success, failure) { pebble.sendAppMessage(
+    dictionary, success, failure); };
   var setTimer = options.setTimer || setTimeout;
-  var clearTimer = options.clearTimer ||
-    (typeof clearTimeout === 'function' ? clearTimeout : function () {});
-  var now = options.now || Date.now;
-  var storage = options.storage;
-  var app = token(options.app, 24) || 'app';
-  var logPrefix = app.toUpperCase().replace(/[^A-Z0-9]/g, '_') + '_APPMESSAGE';
-  var storageKey = 'pebble.appmessage.' + app + '.v1';
+  var clearTimer = options.clearTimer || (typeof clearTimeout === 'function' ?
+    clearTimeout : function () {}), reporter = options.errorReporter;
   var responseIdKey = typeof options.requestIdKey === 'string' && options.requestIdKey ?
     options.requestIdKey : 'REQUEST_ID';
-  var queue = [];
-  var sending = false;
-  var activeRead = null;
-  var completedRead = null;
-  var delivering = {};
-  var events = loadEvents();
-  var opened = false;
-  var api = null;
+  var queue = [], sending = false, activeRead = null, completedRead = null;
+  var delivering = {}, opened = false, api = null;
 
-  function safeText(value, pattern, limit) {
-    try { value = String(value === undefined || value === null ? '' : value); }
-    catch (ignored) { return ''; }
-    return pattern.test(value) ? value.slice(0, limit) : '';
+  function report(error, whileDoing) {
+    try { if (reporter && typeof reporter.report === 'function') reporter.report(error, whileDoing); }
+    catch (ignored) {}
+  }
+
+  function platformLog(code, error) {
+    try {
+      if (typeof options.log === 'function') options.log('pebble-appmessage ' + code, error);
+      else if (typeof console !== 'undefined' && console.log)
+        console.log('pebble-appmessage ' + code, error);
+    } catch (ignored) {}
+  }
+
+  function failure(name, message, fields) {
+    var error = new Error(message); error.name = name;
+    Object.keys(fields || {}).forEach(function (key) { error[key] = fields[key]; });
+    return error;
   }
 
   function token(value, limit) {
-    return safeText(value, /^[A-Za-z0-9_.:-]+$/, limit || 48);
-  }
-
-  function label(value) { return safeText(value, /^[A-Za-z0-9_.: -]*$/, 48); }
-  function shape(value) { return safeText(value, /^[A-Za-z0-9_{}()[\],=:. -]*$/, 500); }
-
-  function boundedNumber(value, maximum) {
-    value = Number(value || 0);
-    if (!isFinite(value) || value < 0) return 0;
-    return Math.min(maximum, Math.floor(value));
+    try {
+      value = String(value === undefined || value === null ? '' : value);
+      return /^[A-Za-z0-9_.:-]+$/.test(value) ? value.slice(0, limit || 48) : '';
+    } catch (error) { report(error, 'normalizing AppMessage metadata'); return ''; }
   }
 
   function validRequestRef(value) {
-    if (typeof value === 'number') {
-      return isFinite(value) && value > 0 && value <= 4294967295 &&
-        Math.floor(value) === value;
-    }
+    if (typeof value === 'number') return isFinite(value) && value > 0 &&
+      value <= 4294967295 && Math.floor(value) === value;
     return typeof value === 'string' && value.length > 0 && value.length <= 48 &&
       /^[A-Za-z0-9_.:-]+$/.test(value);
   }
 
   function requestKey(value) { return (typeof value === 'number' ? 'n:' : 's:') + value; }
 
-  function resultCode(error) {
+  function deliveryContext(meta) {
+    var operation = '';
+    try { operation = token(meta && meta.operation, 24); }
+    catch (error) { report(error, 'reading AppMessage operation metadata'); }
+    return operation ? 'sending an AppMessage for ' + operation : 'sending an AppMessage';
+  }
+
+  function resultCode(value) {
     try {
-      if (typeof error === 'number' && isFinite(error)) return String(error);
-      if (!error) return '';
-      if (typeof error.code === 'number' && isFinite(error.code)) return String(error.code);
-      return token(error.code, 48);
-    } catch (ignored) {
-      return '';
-    }
-  }
-
-  function sanitize(entry) {
-    entry = entry || {};
-    var timestamp = Number(entry.at || now());
-    if (!isFinite(timestamp) || timestamp < 0) timestamp = 0;
-    return {
-      at: timestamp,
-      operation: token(entry.operation, 24),
-      requestId: validRequestRef(entry.requestId) ? entry.requestId : '',
-      event: token(entry.event, 32) || 'event',
-      lifecycle: token(entry.lifecycle, 24),
-      ready: Boolean(entry.ready),
-      attempts: boundedNumber(entry.attempts || entry.attempt, 99),
-      part: boundedNumber(entry.part, 999),
-      resultClass: token(entry.resultClass, 48),
-      resultCode: token(entry.resultCode || entry.code, 64),
-      finalCategory: token(entry.finalCategory, 48),
-      step: label(entry.step),
-      status: boundedNumber(entry.status, 9999),
-      elapsedMs: boundedNumber(entry.elapsedMs, 86400000),
-      replay: token(entry.replay, 96),
-      shape: shape(entry.shape)
-    };
-  }
-
-  function loadEvents() {
-    try {
-      var saved = storage ? JSON.parse(storage.getItem(storageKey) || '[]') : [];
-      var incidents = Array.isArray(saved) ? saved.map(sanitize)
-        .filter(isIncident).slice(0, 32) : [];
-      if (storage && JSON.stringify(saved) !== JSON.stringify(incidents)) {
-        storage.setItem(storageKey, JSON.stringify(incidents));
-      }
-      return incidents;
-    } catch (ignored) { return []; }
-  }
-
-  function isIncident(entry) {
-    if (entry.event === 'domain_terminal') return entry.finalCategory !== 'ok';
-    return entry.event === 'delivery_retry' || entry.event === 'delivery_failure' ||
-      entry.event === 'domain_failure' || entry.event === 'read_invalid' ||
-      entry.event === 'read_conflict' || entry.event === 'read_busy';
-  }
-
-  function record(entry) {
-    var safe = sanitize(entry);
-    output(logPrefix + ' ' + JSON.stringify(safe));
-    if (isIncident(safe)) {
-      events.unshift(safe);
-      events = events.slice(0, 32);
-      try { if (storage) storage.setItem(storageKey, JSON.stringify(events)); }
-      catch (ignored) {}
-    }
-    return safe;
-  }
-
-  function report() { return JSON.stringify({version: 1, app: app, events: events}, null, 2); }
-
-  function replayLog(log) {
-    if (typeof log !== 'function') return;
-    events.forEach(function (entry) {
-      try { log(logPrefix + ' ' + JSON.stringify(entry)); }
-      catch (ignored) {}
-    });
-  }
-
-  function meta(value) {
-    value = value || {};
-    return {
-      operation: token(value.operation, 24),
-      requestId: validRequestRef(value.requestId) ? value.requestId : '',
-      lifecycle: token(value.lifecycle, 24),
-      ready: Boolean(value.ready)
-    };
+      if (typeof value === 'number' && isFinite(value)) return String(value);
+      if (!value) return '';
+      if (typeof value.code === 'number' && isFinite(value.code)) return String(value.code);
+      return token(value.code, 48);
+    } catch (error) { report(error, 'reading an AppMessage failure code'); return ''; }
   }
 
   function copyDictionary(dictionary) {
-    if (!dictionary || typeof dictionary !== 'object' || Array.isArray(dictionary)) return null;
-    var copy = {};
-    var keys;
-    try { keys = Object.keys(dictionary); } catch (ignored) { return null; }
+    if (!dictionary || typeof dictionary !== 'object' || Array.isArray(dictionary)) {
+      var invalid = failure('AppMessageDictionaryError', 'AppMessage dictionary is invalid',
+        {code: 'invalid_dictionary'});
+      report(invalid, 'copying an AppMessage dictionary');
+      return null;
+    }
+    var copy = {}, keys;
+    try { keys = Object.keys(dictionary); }
+    catch (error) { report(error, 'reading an AppMessage dictionary'); return null; }
     for (var index = 0; index < keys.length; index += 1) {
       var key = keys[index];
       var value;
-      try { value = dictionary[key]; } catch (ignoredValue) { return null; }
+      try { value = dictionary[key]; }
+      catch (error) { report(error, 'reading an AppMessage dictionary value'); return null; }
       if (typeof value === 'string') copy[key] = value;
-      else if (typeof value === 'number' && isFinite(value) &&
-          Math.floor(value) === value && Math.abs(value) <= 9007199254740991) {
-        copy[key] = value;
-      } else {
+      else if (typeof value === 'number' && isFinite(value) && Math.floor(value) === value &&
+          Math.abs(value) <= 9007199254740991) copy[key] = value;
+      else {
+        report(failure('AppMessageDictionaryError', 'AppMessage value is unsupported',
+          {code: 'invalid_dictionary_value', key: token(key, 48), valueType: typeof value}),
+        'copying an AppMessage dictionary');
         return null;
       }
     }
@@ -167,34 +98,19 @@ function createAppMessageSession(options) {
   }
 
   function callback(done, outcome) {
-    try { if (typeof done === 'function') done(outcome); } catch (ignored) {}
+    if (typeof done !== 'function') return;
+    try { done(outcome); }
+    catch (error) { report(error, 'running an AppMessage completion callback'); }
+  }
+
+  function schedule(task, delay, whileDoing) {
+    try { return setTimer(task, delay); }
+    catch (error) { report(error, whileDoing || 'scheduling AppMessage work'); task(); return null; }
   }
 
   function finish(series, outcome) {
-    sending = false;
-    queue.shift();
+    sending = false; queue.shift();
     try { callback(series.done, outcome); } finally { pump(); }
-  }
-
-  function logDelivery(series, event, attempts, resultClass, code, part) {
-    record({
-      operation: series.meta.operation,
-      requestId: series.meta.requestId,
-      event: event,
-      lifecycle: series.meta.lifecycle,
-      ready: series.meta.ready,
-      attempts: attempts,
-      part: part === undefined ? series.index : part,
-      resultClass: resultClass,
-      resultCode: code,
-      finalCategory: event === 'delivery_success' ? 'ok' :
-        event === 'delivery_retry' ? 'pending' : 'delivery'
-    });
-  }
-
-  function schedule(task, delay) {
-    try { return setTimer(task, delay); }
-    catch (ignored) { task(); return null; }
   }
 
   function sendCurrent(series) {
@@ -204,59 +120,48 @@ function createAppMessageSession(options) {
     var settled = false;
     var watchdog = null;
 
-    function settle(ok, error, resultClass) {
+    function settle(ok, original, resultClass) {
       if (settled) return;
       settled = true;
       if (watchdog !== null) {
-        try { clearTimer(watchdog); } catch (ignored) {}
+        try { clearTimer(watchdog); }
+        catch (error) { report(error, 'cancelling an AppMessage watchdog'); }
       }
-      var code = resultCode(error);
       if (ok) {
-        var completedPart = series.index;
         series.totalAttempts += attempt;
         series.index += 1;
         series.attempt = 0;
         if (series.index === series.items.length) {
-          logDelivery(series, 'delivery_success', series.totalAttempts,
-            'ack', '', completedPart);
           finish(series, {ok: true, attempts: series.totalAttempts,
             resultClass: 'ack', resultCode: ''});
-        } else {
-          sendCurrent(series);
-        }
+        } else sendCurrent(series);
         return;
       }
+      report(original, series.whileDoing);
       if (attempt < 3) {
-        logDelivery(series, 'delivery_retry', attempt, resultClass, code);
-        schedule(function () { sendCurrent(series); }, [250, 1000][attempt - 1]);
+        schedule(function () { sendCurrent(series); }, [250, 1000][attempt - 1],
+          'scheduling an AppMessage retry');
         return;
       }
-      logDelivery(series, 'delivery_failure', attempt, resultClass, code);
       finish(series, {ok: false, attempts: series.totalAttempts + attempt,
-        resultClass: resultClass, resultCode: code, failedPart: series.index});
+        resultClass: resultClass, resultCode: resultCode(original), failedPart: series.index});
     }
 
     watchdog = schedule(function () {
-      settle(false, {code: 'CALLBACK_TIMEOUT'}, 'callback_timeout');
-    }, 5000);
+      settle(false, failure('AppMessageTimeoutError', 'AppMessage callback timed out',
+        {code: 'CALLBACK_TIMEOUT'}), 'callback_timeout');
+    }, 5000, 'scheduling an AppMessage watchdog');
     if (settled) return;
     try {
       transport(dictionary,
         function () { settle(true, null, 'ack'); },
         function (error) { settle(false, error, 'callback_failure'); });
-    } catch (ignored) {
-      settle(false, null, 'exception');
-    }
+    } catch (error) { settle(false, error, 'exception'); }
   }
 
-  function pump() {
-    if (sending || !queue.length) return;
-    sending = true; sendCurrent(queue[0]);
-  }
+  function pump() { if (!sending && queue.length) { sending = true; sendCurrent(queue[0]); } }
 
-  function rejectSend(metaValue, done, resultClass) {
-    var rejected = {meta: meta(metaValue), index: 0};
-    logDelivery(rejected, 'delivery_failure', 0, resultClass, '');
+  function rejectSend(done, resultClass) {
     callback(done, {ok: false, attempts: 0, resultClass: resultClass, resultCode: ''});
     return false;
   }
@@ -270,59 +175,84 @@ function createAppMessageSession(options) {
     var items = [];
     for (var index = 0; index < source.length; index += 1) {
       var copy = copyDictionary(source[index]);
-      if (!copy) return rejectSend(metaValue, done, 'invalid_dictionary');
+      if (!copy) return rejectSend(done, 'invalid_dictionary');
       items.push(copy);
     }
-    if (queue.length >= 24) return rejectSend(metaValue, done, 'queue_full');
-    queue.push({items: items, meta: meta(metaValue), done: done,
+    if (queue.length >= 24) {
+      report(failure('AppMessageQueueError', 'AppMessage queue is full',
+        {code: 'queue_full'}), 'queueing an AppMessage');
+      return rejectSend(done, 'queue_full');
+    }
+    queue.push({items: items, done: done, whileDoing: deliveryContext(metaValue),
       index: 0, attempt: 0, totalAttempts: 0});
     pump();
     return true;
   }
 
-  function announceReady(dictionary) {
-    var readyMeta = {
-      operation: 'ready', requestId: 'session',
-      lifecycle: 'ready',
-      ready: true
-    };
-    send(dictionary, readyMeta);
-    schedule(function () { send(dictionary, readyMeta); }, 1000);
+  function sendDiagnosticAck(dictionary) {
+    if (sending || queue.length) return;
+    var settled = false, watchdog = null;
+    function release(error) {
+      if (settled) return;
+      settled = true;
+      if (watchdog !== null) {
+        try { clearTimer(watchdog); } catch (ignored) {}
+      }
+      if (error) platformLog('diagnostic_ack_failed', error);
+      sending = false; pump();
+    }
+    sending = true;
+    try {
+      watchdog = setTimer(function () { release(failure('AppMessageTimeoutError',
+        'Diagnostic ACK callback timed out', {code: 'CALLBACK_TIMEOUT'})); },
+      DIAGNOSTIC_ACK_TIMEOUT_MS);
+      transport(dictionary, function () { release(); }, release);
+    } catch (error) { release(error); }
   }
 
-  function output(line) {
+  function receiveWatchError(payload) {
+    if (!payload || Number(payload.ERROR_COMMAND) !== 1) return false;
     try {
-      if (typeof options.log === 'function') options.log(line);
-      else if (typeof console !== 'undefined' && typeof console.log === 'function') console.log(line);
-    } catch (ignored) {}
+      if (reporter && typeof reporter.importWatch === 'function' && reporter.importWatch(payload)) {
+        sendDiagnosticAck({ERROR_COMMAND: 2, ERROR_GENERATION: Number(payload.ERROR_GENERATION),
+          ERROR_SEQUENCE: Number(payload.ERROR_SEQUENCE)});
+      }
+    } catch (error) { platformLog('watch_error_import_failed', error); }
+    return true;
+  }
+
+  function announceReady(dictionary) {
+    var readyMeta = {operation: 'ready', requestId: 'session'};
+    send(dictionary, readyMeta);
+    schedule(function () { send(dictionary, readyMeta); }, 1000,
+      'scheduling the repeated READY message');
   }
 
   function readyMessage() {
-    try {
-      return typeof options.readyMessage === 'function' ? options.readyMessage() :
-        options.readyMessage;
-    } catch (ignored) { return null; }
+    try { return typeof options.readyMessage === 'function' ?
+      options.readyMessage() : options.readyMessage; }
+    catch (error) { report(error, 'building the phone READY message'); return null; }
   }
 
-  /** Registers the raw Pebble boundary once; app callbacks own only protocol routing. */
   function open() {
     if (opened) return false;
     opened = true;
-    pebble.addEventListener('ready', function () {
-      record({operation: 'ready', event: 'lifecycle_ready',
-        lifecycle: 'ready', ready: true});
-      replayLog(output);
-      var message = readyMessage();
-      if (message) announceReady(message);
-    });
-    pebble.addEventListener('appmessage', function (event) {
-      if (typeof options.onMessage !== 'function') return;
-      try { options.onMessage((event && event.payload) || {}, api); }
-      catch (ignored) {
-        record({operation: 'message', event: 'domain_terminal',
-          lifecycle: 'active', ready: true, finalCategory: 'phone_runtime'});
-      }
-    });
+    try {
+      pebble.addEventListener('ready', function () {
+        var message = readyMessage();
+        if (message) announceReady(message);
+      });
+      pebble.addEventListener('appmessage', function (event) {
+        var payload = (event && event.payload) || {};
+        if (receiveWatchError(payload)) return;
+        if (typeof options.onMessage !== 'function') return;
+        try { options.onMessage(payload, api); }
+        catch (error) { report(error, 'handling a watch AppMessage'); }
+      });
+    } catch (error) {
+      report(error, 'registering Pebble AppMessage listeners');
+      return false;
+    }
     return true;
   }
 
@@ -333,28 +263,18 @@ function createAppMessageSession(options) {
     return validRequestRef(fingerprint) ? operation + '|' + requestKey(fingerprint) : '';
   }
 
-  function readEvent(operation, reference, event, category, resultClass) {
-    record({operation: operation, requestId: reference, event: event,
-      lifecycle: 'active', ready: true, resultClass: resultClass,
-      finalCategory: category || 'pending'});
-  }
-
   function hasReference(read, key) {
     return read && Object.prototype.hasOwnProperty.call(read.references, key);
   }
 
-  function deliverRead(read, reference, replay) {
+  function deliverRead(read, reference) {
     var key = requestKey(reference);
-    if (delivering[key]) {
-      readEvent(read.operation, reference, 'read_coalesced');
-      return;
-    }
+    if (delivering[key]) return;
     var dictionary = copyDictionary(read.response);
-    if (dictionary) dictionary[responseIdKey] = reference;
+    if (!dictionary) return;
+    dictionary[responseIdKey] = reference;
     delivering[key] = true;
-    readEvent(read.operation, reference, replay ? 'response_replayed' : 'response_ready');
-    send(dictionary, {operation: read.operation, requestId: reference,
-      lifecycle: 'active', ready: true}, function () {
+    send(dictionary, {operation: read.operation, requestId: reference}, function () {
       delete delivering[key];
     });
   }
@@ -362,18 +282,19 @@ function createAppMessageSession(options) {
   function finishRead(read, response) {
     if (activeRead !== read) return;
     activeRead = null; read.response = response; completedRead = read;
-    read.order.forEach(function (key) {
-      deliverRead(read, read.references[key], false);
-    });
+    read.order.forEach(function (key) { deliverRead(read, read.references[key]); });
   }
 
-  function domainFailure(read, configuration) {
-    readEvent(read.operation, read.firstReference, 'domain_terminal',
-      'phone_runtime', 'exception');
+  function domainFailure(read, configuration, error) {
+    report(error, 'running a phone read operation');
     activeRead = null;
     var fallback = configuration.failureResponse;
     if (typeof fallback === 'function') {
-      try { fallback = fallback(read.firstReference); } catch (ignored) { fallback = null; }
+      try { fallback = fallback(read.firstReference); }
+      catch (fallbackError) {
+        report(fallbackError, 'building a phone failure response');
+        fallback = null;
+      }
     }
     if (fallback !== undefined && fallback !== null) {
       activeRead = read;
@@ -381,71 +302,56 @@ function createAppMessageSession(options) {
     }
   }
 
+  function protocolError(code, operation, reference) {
+    return failure('AppMessageProtocolError', 'AppMessage read request is invalid',
+      {code: code, operation: token(operation, 24),
+        requestId: validRequestRef(reference) ? reference : ''});
+  }
+
   function handleRead(reference, operation, run, configuration) {
     configuration = configuration || {};
     var signature = readSignature(operation, configuration.fingerprint);
     if (!validRequestRef(reference) || !signature || typeof run !== 'function') {
-      readEvent(operation, reference, 'read_invalid', 'protocol');
+      report(protocolError('read_invalid', operation, reference), 'admitting a phone read');
       return false;
     }
     operation = token(operation, 24);
     var key = requestKey(reference);
-    readEvent(operation, reference, 'read_received');
-
     if (hasReference(completedRead, key)) {
       if (completedRead.signature !== signature) {
-        readEvent(operation, reference, 'read_conflict', 'protocol');
+        report(protocolError('read_conflict', operation, reference), 'replaying a phone read');
         return false;
       }
-      deliverRead(completedRead, reference, true);
+      deliverRead(completedRead, reference);
       return true;
     }
     if (hasReference(activeRead, key)) {
       if (activeRead.signature !== signature) {
-        readEvent(operation, reference, 'read_conflict', 'protocol');
+        report(protocolError('read_conflict', operation, reference), 'coalescing a phone read');
         return false;
       }
-      readEvent(operation, reference, 'read_coalesced');
       return true;
     }
     if (activeRead) {
       if (activeRead.signature !== signature) {
-        readEvent(operation, reference, 'read_busy', 'protocol');
+        report(protocolError('read_busy', operation, reference), 'admitting a phone read');
         return false;
       }
       activeRead.references[key] = reference;
       activeRead.order.push(key);
-      readEvent(operation, reference, 'read_joined');
       return true;
     }
-
-    var read = {
-      operation: operation,
-      signature: signature,
-      firstReference: reference,
-      references: {},
-      order: []
-    };
+    var read = {operation: operation, signature: signature, firstReference: reference,
+      references: {}, order: []};
     read.references[key] = reference;
     read.order.push(key);
     activeRead = read;
-    try {
-      run(reference, function (response) { finishRead(read, response); });
-    } catch (ignored) {
-      if (activeRead === read) domainFailure(read, configuration);
-    }
+    try { run(reference, function (response) { finishRead(read, response); }); }
+    catch (error) { if (activeRead === read) domainFailure(read, configuration, error); }
     return true;
   }
 
-  api = {
-    open: open,
-    send: send,
-    announceReady: announceReady,
-    handleRead: handleRead,
-    record: record,
-    report: report,
-    replayLog: replayLog
-  };
+  api = {open: open, send: send, announceReady: announceReady, handleRead: handleRead};
   return api;
 }
 

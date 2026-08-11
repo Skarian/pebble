@@ -2,6 +2,7 @@
 #define APP_MESSAGE_CLIENT_H
 
 #include <pebble.h>
+#include <error_reporter.h>
 
 #define APP_MESSAGE_CLIENT_ID_CAPACITY 65
 
@@ -115,8 +116,15 @@ typedef struct {
   AppMessageUnsolicitedReceived unsolicited_received;
   AppMessageStateChanged state_changed;
   AppMessageRequestFailed request_failed;
+  ErrorReporter *errors;
   void *context;
 } AppMessageClientConfig;
+
+bool app_message_tuple_uint(const Tuple *tuple, uint32_t *value);
+bool app_message_tuple_int(const Tuple *tuple, int32_t *value);
+bool app_message_tuple_cstring(const Tuple *tuple, const char **value);
+bool app_message_tuple_data(
+    const Tuple *tuple, const uint8_t **value, uint16_t *length);
 
 AppMessageClient *app_message_client_open(
     const AppMessageClientConfig *config, AppMessageResult *result);

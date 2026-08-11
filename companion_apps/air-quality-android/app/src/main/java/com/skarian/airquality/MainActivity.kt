@@ -4,8 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -13,9 +11,13 @@ import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
-import android.widget.Toast
 import java.time.Instant
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 @SuppressLint("SetTextI18n")
 class MainActivity : Activity() {
@@ -25,9 +27,10 @@ class MainActivity : Activity() {
     private lateinit var currentReading: TextView
     private lateinit var detailReading: TextView
     private lateinit var serviceStatus: TextView
-    private lateinit var diagnosticsStatus: TextView
+    private lateinit var errorReportingStatus: TextView
     private var historyImporting = false
-    private val diagnostics by lazy { AirQualityPebbleService.appMessageSession(this) }
+    private val errorReporter by lazy { airErrorReporter(this) }
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,27 +41,41 @@ class MainActivity : Activity() {
         currentReading = findViewById(R.id.currentReading)
         detailReading = findViewById(R.id.detailReading)
         serviceStatus = findViewById(R.id.serviceStatus)
-        diagnosticsStatus = findViewById(R.id.diagnosticsStatus)
+        errorReportingStatus = findViewById(R.id.errorReportingStatus)
         watchName.setText(settings.watchName)
 
-        findViewById<Button>(R.id.chooseSensor).setOnClickListener { chooseSensor() }
-        findViewById<Button>(R.id.refreshNow).setOnClickListener { refreshNow() }
-        findViewById<Button>(R.id.copyDiagnostics).setOnClickListener { copyDiagnostics() }
+        findViewById<Button>(R.id.chooseSensor).setOnClickListener {
+            guarded("choosing an Aranet sensor", ::chooseSensor)
+        }
+        findViewById<Button>(R.id.refreshNow).setOnClickListener {
+            guarded("refreshing air quality", ::refreshNow)
+        }
+        findViewById<Button>(R.id.errorReportingButton).setOnClickListener {
+            errorReporter.openSettings(this, ::errorReportingChanged)
+        }
         AirQualityDailySync.schedule(this)
-        updateUi()
-        maybeImportHistory()
+        guarded("loading saved air quality") {
+            updateUi()
+            maybeImportHistory()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        diagnostics.replayLogcat()
-        updateUi()
-        maybeImportHistory()
+        guarded("loading saved air quality") {
+            updateUi()
+            maybeImportHistory()
+        }
     }
 
     override fun onPause() {
         settings.watchName = watchName.text.toString()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        appScope.cancel()
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(
@@ -70,7 +87,7 @@ class MainActivity : Activity() {
         when (requestCode) {
             REQUEST_BLUETOOTH -> {
                 if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                    discoverSensors()
+                    guarded("discovering Aranet sensors", ::discoverSensors)
                 } else {
                     serviceStatus.text = "Allow Nearby devices to find your Aranet4."
                 }
@@ -79,7 +96,7 @@ class MainActivity : Activity() {
     }
 
     private fun chooseSensor() {
-        if (!AranetScanner(this).hasPermissions()) {
+        if (!AranetScanner(this, errorReporter).hasPermissions()) {
             requestPermissions(requiredPermissions(), REQUEST_BLUETOOTH)
             return
         }
@@ -87,7 +104,7 @@ class MainActivity : Activity() {
     }
 
     private fun discoverSensors() {
-        val scanner = AranetScanner(this)
+        val scanner = AranetScanner(this, errorReporter)
         if (!scanner.bluetoothEnabled()) {
             serviceStatus.text = "Turn on Bluetooth, then try again."
             return
@@ -104,7 +121,9 @@ class MainActivity : Activity() {
             }.toTypedArray()
             AlertDialog.Builder(this)
                 .setTitle("Choose Aranet4")
-                .setItems(labels) { _, index -> selectSensor(devices[index]) }
+                .setItems(labels) { _, index ->
+                    guarded("selecting an Aranet sensor") { selectSensor(devices[index]) }
+                }
                 .setNegativeButton("Cancel", null)
                 .show()
         }
@@ -128,7 +147,7 @@ class MainActivity : Activity() {
             chooseSensor()
             return
         }
-        val scanner = AranetScanner(this)
+        val scanner = AranetScanner(this, errorReporter)
         if (!scanner.hasPermissions()) {
             requestPermissions(requiredPermissions(), REQUEST_BLUETOOTH)
             return
@@ -156,7 +175,7 @@ class MainActivity : Activity() {
         val address = settings.sensorAddress ?: return
         if (historyImporting || settings.historyImportedAddress == address) return
         if (!force && settings.historyAttemptedAddress == address) return
-        val scanner = AranetScanner(this)
+        val scanner = AranetScanner(this, errorReporter)
         if (!scanner.hasPermissions() || !scanner.bluetoothEnabled()) return
         val now = Instant.now().epochSecond
         val current = ReadingStore(this).use {
@@ -166,7 +185,7 @@ class MainActivity : Activity() {
         historyImporting = true
         settings.historyAttemptedAddress = address
         serviceStatus.text = "Importing saved Aranet4 history..."
-        AranetHistoryReader(applicationContext).import(
+        AranetHistoryReader(applicationContext, errorReporter).import(
             address = address,
             deviceName = settings.sensorName ?: "Aranet4",
             batteryPercent = current.batteryPercent,
@@ -191,7 +210,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateUi() {
-        diagnosticsStatus.text = "Recent connection errors are stored without sensor readings or addresses."
+        renderErrorReporting()
         val address = settings.sensorAddress
         sensorStatus.text = if (address.isNullOrBlank()) "No sensor selected" else settings.sensorName ?: "Aranet4"
         if (address.isNullOrBlank()) {
@@ -226,11 +245,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun copyDiagnostics() {
-        getSystemService(ClipboardManager::class.java).setPrimaryClip(
-            ClipData.newPlainText("Air Quality connection diagnostics", diagnostics.exportLog()),
-        )
-        Toast.makeText(this, "Diagnostics copied", Toast.LENGTH_SHORT).show()
+    private fun renderErrorReporting() {
+        val status = errorReporter.status()
+        errorReportingStatus.text = "${if (status.enabled) "Enabled" else "Disabled"} · ${status.queued} queued"
+    }
+
+    private fun errorReportingChanged() {
+        renderErrorReporting()
+        appScope.launch {
+            AirQualityPebbleService.appMessageSession(this@MainActivity)
+                .repeatReadyForOpenWatches(PebbleProtocol.phoneReady())
+        }
+    }
+
+    private inline fun guarded(whileDoing: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (error: Throwable) {
+            errorReporter.report(error, whileDoing)
+            runCatching { serviceStatus.text = "Air Quality encountered an error. Try again." }
+        }
     }
 
     private fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

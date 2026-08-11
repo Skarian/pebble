@@ -50,24 +50,13 @@ never retried. Each watch response window is 30 seconds; a timed-out read can
 resend the same ID within the client's three total delivery attempts.
 Individual upstream HTTP requests time out after 12 seconds.
 
-### Connection diagnostics
+### Optional error reporting
 
-The phone retains the newest thirty-two sanitized AppMessage/domain fault
-incidents, including failed attempts that later recover, plus safe ResMed
-step/status/timing metadata. Routine lifecycle and success events are live-only.
-The persistent ring excludes
-credentials, payload values, and response bodies. Use **Copy diagnostics** under
-**Connection diagnostics** in
-CPAP Settings or the centralized commands in
-[`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).
-Opening Settings also replays the saved incident ring to phone logs with the stable
-`CPAP_APPMESSAGE` prefix.
-
-The `replay` field identifies the exact simulated failure to construct in the
-client tests, such as `http:sleep-records:503`,
-`transport:authorization:timeout`, or
-`parse:sleep-records:missing-items`. Diagnostics survive app and phone runtime
-restarts, but uninstalling CPAP or clearing the Pebble app's data removes them.
+CPAP Settings can opt in to sending source errors from PebbleKit JS and the
+watch to Pebble Diagnostics using the same Diagnostic key as the Android
+companions. The bounded local outbox, exact redaction rules, and server-query
+commands are documented in
+[`../../docs/error-reporting.md`](../../docs/error-reporting.md).
 
 The day details and graphs form one bounded vertical list: the oldest day is at
 the top, yesterday sits below the other day pages, and the five graphs sit below
@@ -224,7 +213,8 @@ The resulting installable bundle is `build/cpap.pbw`.
 - `src/c/main.c` — Emery watch UI, button navigation, cache, and AppMessage handling.
 - `src/pkjs/index.js` — phone settings and watch communication.
 - `../../shared/appmessage/pkjs/app_message_session.js` — serialized AppMessage delivery,
-  READY announcements, exact-ID read replay, and redacted connection diagnostics.
+  READY announcements, and exact-ID read replay.
+- `../../shared/errors/pkjs/error_reporter.js` — optional bounded source-error capture and upload.
 - `src/common/resmed_client.js` — direct USA myAir OAuth/PKCE and GraphQL client.
 - `src/common/sha256.js` — small ES5 SHA-256 implementation used for PKCE.
 - `src/common/cpap_model.js` — seven-day date and nightly-metric normalization.

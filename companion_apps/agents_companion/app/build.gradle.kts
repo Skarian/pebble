@@ -37,6 +37,10 @@ android {
     packaging {
         jniLibs.excludes += setOf("lib/*/libtermux.so", "lib/*/liblocal-socket.so")
     }
+
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 kotlin {

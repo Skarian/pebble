@@ -40,7 +40,9 @@ test('automatic checks run every two hours from 10 AM and only reveal a newer re
 
 test('phone sends only the final ResMed result and dev does not wait for a request', () => {
   assert.doesNotMatch(phone, /SCORES_KEY|sendCached/);
-  assert.match(phone, /readyMessage: \{PROTOCOL: 1, COMMAND: COMMAND_PHONE_READY\}/);
+  assert.match(phone, /function readyMessage\(\)[\s\S]*ERROR_ENABLED: errorReporter\.readyValue\(\)/);
+  assert.match(phone, /readyMessage: readyMessage/);
+  assert.doesNotMatch(phone, /handleWatchMessage|sendOnceIfIdle/);
   assert.match(phone, /appMessages\.open\(\)/);
   assert.doesNotMatch(phone, /Pebble\.sendAppMessage|Pebble\.addEventListener\('ready'|Pebble\.addEventListener\('appmessage'/);
   assert.doesNotMatch(dev, /scoresReady/);

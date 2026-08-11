@@ -1,0 +1,38 @@
+[Unit]
+Description=Pebble Diagnostics error journal
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pebble-diagnostics
+Group=pebble-diagnostics
+WorkingDirectory=/opt/pebble-diagnostics/current
+Environment=NODE_ENV=production
+Environment=PEBBLE_DIAGNOSTICS_HOST=127.0.0.1
+Environment=PEBBLE_DIAGNOSTICS_PORT=8000
+Environment=PEBBLE_DIAGNOSTICS_DB=/var/lib/pebble-diagnostics/errors.sqlite3
+Environment=PEBBLE_DIAGNOSTICS_MAX_BYTES=536870912
+Environment=PEBBLE_DIAGNOSTICS_PUBLIC_URL=https://pebble.exe.xyz
+LoadCredential=pebble-session:/etc/pebble-diagnostics/session-secret
+ExecStart=/usr/bin/node /opt/pebble-diagnostics/current/server.mjs
+Restart=on-failure
+RestartSec=5
+StateDirectory=pebble-diagnostics
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+InaccessiblePaths=-/run/docker.sock
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

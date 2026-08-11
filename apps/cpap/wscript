@@ -22,10 +22,11 @@ def build(ctx):
         ctx.set_group(ctx.env.PLATFORM_NAME)
         app_elf = '{}/pebble-app.elf'.format(ctx.env.BUILD_DIR)
         shared = ctx.path.find_node('../../shared/appmessage/watch')
-        sources = ctx.path.ant_glob('src/c/**/*.c') + shared.ant_glob('*.c')
+        errors = ctx.path.find_node('../../shared/errors/watch')
+        sources = ctx.path.ant_glob('src/c/**/*.c') + shared.ant_glob('*.c') + errors.ant_glob('*.c')
         ctx.pbl_build(
             source=sources,
-            includes=[shared.abspath()],
+            includes=[shared.abspath(), errors.abspath()],
             target=app_elf,
             bin_type='app'
         )
@@ -34,8 +35,9 @@ def build(ctx):
     ctx.env = cached_env
     ctx.set_group('bundle')
     shared_js = ctx.path.find_node('../../shared/appmessage/pkjs')
+    errors_js = ctx.path.find_node('../../shared/errors/pkjs')
     ctx.pbl_bundle(
         binaries=binaries,
-        js=ctx.path.ant_glob(['src/pkjs/**/*.js', 'src/common/**/*.js']) + shared_js.ant_glob('*.js'),
+        js=ctx.path.ant_glob(['src/pkjs/**/*.js', 'src/common/**/*.js']) + shared_js.ant_glob('*.js') + errors_js.ant_glob('*.js'),
         js_entry_file='src/pkjs/index.js'
     )

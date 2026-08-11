@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import com.skarian.pebble.errors.ErrorReporter
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -24,15 +25,24 @@ data class DiscoveredAranet(
     val reading: AranetReading?,
 )
 
-class AranetScanner(private val context: Context) {
+class AranetScanner(
+    private val context: Context,
+    private val errors: ErrorReporter = ErrorReporter.Disabled,
+) {
     private val handler = Handler(Looper.getMainLooper())
-    private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
-    private val adapter: BluetoothAdapter? get() = bluetoothManager?.adapter
+    private val bluetoothManager = guarded(
+        "accessing the Android Bluetooth service", null,
+    ) { context.getSystemService(BluetoothManager::class.java) }
+    private val adapter: BluetoothAdapter? get() = guarded(
+        "accessing the Android Bluetooth adapter", null,
+    ) { bluetoothManager?.adapter }
 
-    fun bluetoothEnabled(): Boolean = adapter?.isEnabled == true
+    fun bluetoothEnabled(): Boolean = guarded("checking whether Bluetooth is enabled", false) {
+        adapter?.isEnabled == true
+    }
 
-    fun hasPermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    fun hasPermissions(): Boolean = guarded("checking Nearby devices permission", false) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
                 context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         } else {
@@ -42,32 +52,48 @@ class AranetScanner(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun discover(durationMillis: Long = 6000, complete: (List<DiscoveredAranet>) -> Unit) {
-        val scanner = adapter?.bluetoothLeScanner ?: run { complete(emptyList()); return }
+        val scanner = adapter?.bluetoothLeScanner ?: run {
+            errors.report(BluetoothScannerUnavailable(), "discovering Aranet sensors")
+            guarded("delivering Aranet discovery results", Unit) { complete(emptyList()) }
+            return
+        }
         val found = linkedMapOf<String, DiscoveredAranet>()
         var finished = false
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val name = result.device.name ?: result.scanRecord?.deviceName ?: "Aranet4"
-                if (!name.startsWith("Aranet4") && !hasAranetService(result)) return
-                val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID)
-                val reading = bytes?.let {
-                    AranetProtocol.parseAdvertisement(
-                        it, name, result.device.address, Instant.now().epochSecond,
-                    )
+                try {
+                    val name = result.device.name ?: result.scanRecord?.deviceName ?: "Aranet4"
+                    if (!name.startsWith("Aranet4") && !hasAranetService(result)) return
+                    val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID)
+                    val reading = bytes?.let {
+                        AranetProtocol.parseAdvertisement(
+                            it, name, result.device.address, Instant.now().epochSecond,
+                        )
+                    }
+                    found[result.device.address] = DiscoveredAranet(result.device.address, name, reading)
+                } catch (error: Throwable) {
+                    errors.report(error, "processing an Aranet discovery result")
+                    finish()
                 }
-                found[result.device.address] = DiscoveredAranet(result.device.address, name, reading)
             }
 
-            override fun onScanFailed(errorCode: Int) { finish() }
+            override fun onScanFailed(errorCode: Int) {
+                errors.report(BluetoothScanFailure(errorCode), "discovering Aranet sensors")
+                finish()
+            }
 
             fun finish() {
                 if (finished) return
                 finished = true
-                runCatching { scanner.stopScan(this) }
-                complete(found.values.toList())
+                guarded("stopping Aranet discovery", Unit) { scanner.stopScan(this) }
+                guarded("delivering Aranet discovery results", Unit) { complete(found.values.toList()) }
             }
         }
-        scanner.startScan(serviceFilters(), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
+        val started = guarded("starting Aranet discovery", false) {
+            scanner.startScan(serviceFilters(), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
+            true
+        }
+        if (!started) callback.finish()
         handler.postDelayed({ callback.finish() }, durationMillis)
     }
 
@@ -79,33 +105,56 @@ class AranetScanner(private val context: Context) {
     ): () -> Unit {
         val scanner = adapter?.bluetoothLeScanner
         if (scanner == null) {
-            complete(null)
+            errors.report(BluetoothScannerUnavailable(), "reading the Aranet sensor")
+            guarded("delivering an Aranet scan result", Unit) { complete(null) }
             return {}
         }
         val finished = AtomicBoolean()
         var timeout: Runnable? = null
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID) ?: return
-                val name = result.device.name ?: result.scanRecord?.deviceName ?: "Aranet4"
-                val reading = AranetProtocol.parseAdvertisement(
-                    bytes, name, result.device.address, Instant.now().epochSecond,
-                ) ?: return
-                finish(reading)
+                try {
+                    val bytes = result.scanRecord?.getManufacturerSpecificData(AranetProtocol.MANUFACTURER_ID) ?: return
+                    val name = result.device.name ?: result.scanRecord?.deviceName ?: "Aranet4"
+                    val reading = AranetProtocol.parseAdvertisement(
+                        bytes, name, result.device.address, Instant.now().epochSecond,
+                    ) ?: return
+                    finish(reading)
+                } catch (error: Throwable) {
+                    errors.report(error, "processing an Aranet scan result")
+                    finish(null)
+                }
             }
 
-            override fun onScanFailed(errorCode: Int) { finish(null) }
+            override fun onScanFailed(errorCode: Int) {
+                errors.report(BluetoothScanFailure(errorCode), "reading the Aranet sensor")
+                finish(null)
+            }
 
             fun finish(reading: AranetReading?, deliver: Boolean = true) {
                 if (!finished.compareAndSet(false, true)) return
                 timeout?.let(handler::removeCallbacks)
-                runCatching { scanner.stopScan(this) }
-                if (deliver) complete(reading)
+                guarded("stopping the Aranet scan", Unit) { scanner.stopScan(this) }
+                if (deliver) guarded("delivering an Aranet scan result", Unit) { complete(reading) }
             }
         }
-        val filter = ScanFilter.Builder().setDeviceAddress(address).build()
-        scanner.startScan(listOf(filter), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
-        val timeoutTask = Runnable { callback.finish(null) }
+        val filter = guarded("creating the Aranet scan filter", null) {
+            ScanFilter.Builder().setDeviceAddress(address).build()
+        } ?: run {
+            guarded("delivering an Aranet scan result", Unit) { complete(null) }
+            return {}
+        }
+        val started = guarded("starting the Aranet scan", false) {
+            scanner.startScan(listOf(filter), scanSettings(ScanSettings.SCAN_MODE_LOW_LATENCY), callback)
+            true
+        }
+        if (!started) callback.finish(null)
+        val timeoutTask = Runnable {
+            if (!finished.get()) errors.report(
+                BluetoothScanTimeout(timeoutMillis), "reading the Aranet sensor",
+            )
+            callback.finish(null)
+        }
         timeout = timeoutTask
         handler.postDelayed(timeoutTask, timeoutMillis)
         return { callback.finish(null, deliver = false) }
@@ -125,4 +174,20 @@ class AranetScanner(private val context: Context) {
         val services = result.scanRecord?.serviceUuids.orEmpty().map { it.uuid.toString().lowercase() }
         return AranetProtocol.SERVICE_CURRENT in services || AranetProtocol.SERVICE_LEGACY in services
     }
+
+    private inline fun <T> guarded(whileDoing: String, fallback: T, block: () -> T): T = try {
+        block()
+    } catch (error: Throwable) {
+        errors.report(error, whileDoing)
+        fallback
+    }
 }
+
+internal class BluetoothScannerUnavailable :
+    IllegalStateException("Android did not provide a Bluetooth LE scanner.")
+
+internal class BluetoothScanFailure(val errorCode: Int) :
+    IllegalStateException("Bluetooth LE scan failed with platform code $errorCode.")
+
+internal class BluetoothScanTimeout(val timeoutMillis: Long) :
+    IllegalStateException("Bluetooth LE scan did not return the selected sensor within $timeoutMillis ms.")

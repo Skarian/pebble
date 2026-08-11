@@ -111,26 +111,26 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="28dp"
-            android:text="Connection diagnostics"
+            android:text="Error reporting"
             android:textColor="#111111"
             android:textSize="16sp"
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/diagnosticsStatus"
+            android:id="@+id/errorReportingStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Recent connection errors are stored without sensor readings or addresses."
+            android:text="Disabled · 0 queued"
             android:textColor="#555555"
             android:textSize="15sp" />
 
         <Button
-            android:id="@+id/copyDiagnostics"
+            android:id="@+id/errorReportingButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="Copy connection diagnostics"
+            android:text="Configure error reporting"
             android:textAllCaps="false"
             android:textSize="17sp" />
 

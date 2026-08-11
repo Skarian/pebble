@@ -5,10 +5,17 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AirQualityReadTest {
+    @Test
+    fun `reading insert failure is never silently ignored`() {
+        assertThrows(IllegalStateException::class.java) { requireReadingInserted(-1) }
+    }
+
     @Test
     fun `cached response precedes one live scan and history repair`() = runBlocking {
         val scanGate = CompletableDeferred<Unit>()
@@ -52,8 +59,9 @@ class AirQualityReadTest {
 
     @Test
     fun `live failure retains cached response and exposes no exception content`() = runBlocking {
+        val original = IllegalStateException("sensor address and payload must not escape")
         val fixture = Fixture(live = {
-            throw IllegalStateException("sensor address and payload must not escape")
+            throw original
         })
 
         val responses = fixture.pipeline.execute(request(22))
@@ -66,6 +74,7 @@ class AirQualityReadTest {
             fixture.events,
         )
         assertTrue(fixture.events.none { it.contains("sensor address") })
+        assertSame(original, fixture.reported.single())
         fixture.pipeline.replay(request(22), responses)
         assertEquals(
             listOf("deliver:cached_snapshot_replay", "deliver:live_scan_replay"),
@@ -85,6 +94,7 @@ class AirQualityReadTest {
         },
     ) {
         val events = mutableListOf<String>()
+        val reported = mutableListOf<Throwable>()
         var scans = 0
         val pipeline = AirQualityRequestPipeline(
             cachedResponse = {
@@ -105,6 +115,7 @@ class AirQualityReadTest {
                 values.forEach { events += "deliver:${it.operation}" }
             },
             scheduleHistoryRepair = { events += "history" },
+            reportError = reported::add,
         )
     }
 }

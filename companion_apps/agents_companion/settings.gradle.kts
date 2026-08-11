@@ -16,5 +16,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AgentsCompanion"
-include(":app", ":pebble-appmessage")
+include(":app", ":pebble-appmessage", ":pebble-errors")
 project(":pebble-appmessage").projectDir = file("../../shared/appmessage/android")
+project(":pebble-errors").projectDir = file("../../shared/errors/android")

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted Pebble Diagnostics backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+RandomizedDelaySec=30m
+Persistent=true
+Unit=pebble-diagnostics-backup.service
+
+[Install]
+WantedBy=timers.target

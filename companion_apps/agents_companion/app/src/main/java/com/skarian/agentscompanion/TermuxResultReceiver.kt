@@ -3,6 +3,7 @@ package com.skarian.agentscompanion
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.skarian.pebble.errors.ErrorReporter
 import com.termux.shared.termux.TermuxConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,20 +11,98 @@ import kotlinx.coroutines.launch
 
 class TermuxResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val requestId=intent.getStringExtra(TermuxCommandRunner.EXTRA_REQUEST_ID) ?: return; val kind=intent.getStringExtra(TermuxCommandRunner.EXTRA_KIND) ?: return
-        val watchId = intent.getStringExtra(TermuxCommandRunner.EXTRA_WATCH_ID)
-        val mode=intent.getStringExtra(TermuxCommandRunner.EXTRA_MODE)?.let { runCatching { ExecutionMode.valueOf(it) }.getOrNull() }
-        val bundle=intent.getBundleExtra(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE) ?: return
-        val result=StoredResult(requestId,kind,mode,bundle.getString(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_STDOUT,""),bundle.getString(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_STDERR,""),bundle.getInt(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_EXIT_CODE,-1),bundle.getInt(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_ERR,-1).takeIf{it>0}?:0,bundle.getString(TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_ERRMSG,""))
-        val state=CompanionState(context); state.saveResult(result)
-        val pending=goAsync()
-        CoroutineScope(Dispatchers.IO).launch {
-            try { when(kind) {
-                TermuxCommandRunner.KIND_AGENTS -> handleAgents(context,state,result,watchId)
-                TermuxCommandRunner.KIND_DOCTOR -> handleDoctor(state,result)
-                TermuxCommandRunner.KIND_SEND -> handleTurn(context,state,result,mode ?: ExecutionMode.FINAL_JSON)
-            } } catch(error:Exception) { state.saveBridgeError("Could not process Termux result: ${error.message}") } finally { context.sendBroadcast(Intent(TermuxCommandRunner.ACTION_RESULT_UPDATED).setPackage(context.packageName).putExtra(TermuxCommandRunner.EXTRA_REQUEST_ID,requestId)); pending.finish() }
+        val reporter = agentsErrorReporter(context)
+        try {
+            receive(context, intent, reporter)
+        } catch (error: Throwable) {
+            reporter.report(error, "parsing a Termux result envelope")
         }
+    }
+
+    private fun receive(context: Context, intent: Intent, reporter: ErrorReporter) {
+        val requestId = intent.getStringExtra(TermuxCommandRunner.EXTRA_REQUEST_ID) ?: return reportEnvelope(
+            reporter, intent, "Termux result is missing its request id.",
+        )
+        val kind = intent.getStringExtra(TermuxCommandRunner.EXTRA_KIND) ?: return reportEnvelope(
+            reporter, intent, "Termux result is missing its operation kind.",
+        )
+        val watchId = intent.getStringExtra(TermuxCommandRunner.EXTRA_WATCH_ID)
+        val mode = intent.getStringExtra(TermuxCommandRunner.EXTRA_MODE)?.let { raw ->
+            runCatching { ExecutionMode.valueOf(raw) }
+                .onFailure { reporter.report(it, "parsing a Termux result envelope") }
+                .getOrNull()
+        }
+        val bundle = intent.getBundleExtra(
+            TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE,
+        ) ?: return reportEnvelope(reporter, intent, "Termux result is missing its result bundle.")
+        val result = try {
+            StoredResult(
+                requestId = requestId,
+                kind = kind,
+                mode = mode,
+                stdout = bundle.getString(
+                    TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_STDOUT, "",
+                ),
+                stderr = bundle.getString(
+                    TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_STDERR, "",
+                ),
+                exitCode = bundle.getInt(
+                    TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_EXIT_CODE, -1,
+                ),
+                errorCode = bundle.getInt(
+                    TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_ERR, -1,
+                ).takeIf { it > 0 } ?: 0,
+                errorMessage = bundle.getString(
+                    TermuxConstants.TERMUX_APP.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE_ERRMSG, "",
+                ),
+            )
+        } catch (error: Throwable) {
+            reporter.report(error, "parsing a Termux result bundle")
+            return
+        }
+        val state = CompanionState(context)
+        state.saveResult(result)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                when (kind) {
+                    TermuxCommandRunner.KIND_AGENTS -> handleAgents(context, state, result, watchId)
+                    TermuxCommandRunner.KIND_DOCTOR -> handleDoctor(context, state, result)
+                    TermuxCommandRunner.KIND_SEND -> handleTurn(
+                        context, state, result, mode ?: ExecutionMode.FINAL_JSON,
+                    )
+                    else -> reporter.report(
+                        TermuxResultEnvelopeError(
+                            "Unknown Termux result kind.", kind, intent.action, intent.dataString,
+                            intent.extras?.keySet()?.sorted().orEmpty(),
+                        ),
+                        "processing a Termux result",
+                    )
+                }
+            } catch (error: Exception) {
+                reporter.report(error, "processing a Termux result")
+                state.saveBridgeError("Could not process Termux result: ${error.message}")
+            } finally {
+                runCatching {
+                    context.sendBroadcast(
+                        Intent(TermuxCommandRunner.ACTION_RESULT_UPDATED)
+                            .setPackage(context.packageName)
+                            .putExtra(TermuxCommandRunner.EXTRA_REQUEST_ID, requestId),
+                    )
+                }.onFailure { reporter.report(it, "announcing a processed Termux result") }
+                pending.finish()
+            }
+        }
+    }
+
+    private fun reportEnvelope(reporter: ErrorReporter, intent: Intent, message: String) {
+        reporter.report(
+            TermuxResultEnvelopeError(
+                message, intent.getStringExtra(TermuxCommandRunner.EXTRA_KIND), intent.action,
+                intent.dataString, intent.extras?.keySet()?.sorted().orEmpty(),
+            ),
+            "parsing a Termux result envelope",
+        )
     }
 
     private suspend fun handleAgents(
@@ -32,7 +111,9 @@ class TermuxResultReceiver : BroadcastReceiver() {
         result: StoredResult,
         watchId: String?,
     ) {
-        val response = parseAgentRefresh(result)
+        val response = parseAgentRefresh(result) {
+            agentsErrorReporter(context).report(it, "refreshing the agent list")
+        }
         response.agents?.let(state::saveAgents)
         val appContext = context.applicationContext
         val messages = AgentsAppMessage(appContext)
@@ -46,9 +127,20 @@ class TermuxResultReceiver : BroadcastReceiver() {
         }
         finishAgentRefresh(appContext, state, target, result.requestId, response)
     }
-    private fun handleDoctor(state:CompanionState,result:StoredResult) { val doctor=runCatching { RouterProtocol.parseDoctor(result.stdout) }.getOrNull(); state.saveDoctor(if(doctor!=null) DoctorStatus(doctor.ok,doctor.checks.joinToString("\n"){"${if(it.ok)"OK" else "FAIL"}  ${it.summary}"}) else DoctorStatus(false,result.stderr.ifBlank { result.errorMessage.ifBlank { "Doctor failed." } })) }
+    private fun handleDoctor(context: Context, state:CompanionState,result:StoredResult) {
+        val reporter = agentsErrorReporter(context)
+        if (result.exitCode != 0) reporter.report(TermuxExecutionError(result), "running router doctor")
+        val doctor = runCatching { RouterProtocol.parseDoctor(result.stdout) }
+            .onFailure { reporter.report(it, "parsing router doctor output") }
+            .getOrNull()
+        state.saveDoctor(if(doctor!=null) DoctorStatus(doctor.ok,doctor.checks.joinToString("\n"){"${if(it.ok)"OK" else "FAIL"}  ${it.summary}"}) else DoctorStatus(false,result.stderr.ifBlank { result.errorMessage.ifBlank { "Doctor failed." } }))
+    }
     private suspend fun handleTurn(context:Context,state:CompanionState,result:StoredResult,mode:ExecutionMode) {
-        val terminal=runCatching { RouterProtocol.parseResult(result.stdout,mode).lastOrNull()?.takeIf { it.type=="completed" || it.type=="failed" } }.getOrNull()
+        val reporter = agentsErrorReporter(context)
+        if (result.exitCode != 0) reporter.report(TermuxExecutionError(result), "running an agent turn")
+        val terminal=runCatching { RouterProtocol.parseResult(result.stdout,mode).lastOrNull()?.takeIf { it.type=="completed" || it.type=="failed" } }
+            .onFailure { reporter.report(it, "parsing an agent result") }
+            .getOrNull()
         val turn=state.updateTurn(result.requestId) { current ->
             if(current.state==TurnState.TERMINAL && current.eventType=="completed") current
             else if(terminal!=null) current.copy(state=TurnState.TERMINAL,eventType=terminal.type,text=terminal.text,code=terminal.code.orEmpty(),ambiguous=terminal.ambiguous,sequence=(current.sequence+1).coerceAtMost(65535))
@@ -71,9 +163,16 @@ class TermuxResultReceiver : BroadcastReceiver() {
 internal data class AgentRefreshReply(val agents: List<AgentSummary>?, val category: String)
 
 internal fun parseAgentRefresh(result: StoredResult): AgentRefreshReply {
-    val agents = if (result.exitCode != 0) null else runCatching {
+    return parseAgentRefresh(result) {}
+}
+
+internal fun parseAgentRefresh(result: StoredResult, reportError: (Any) -> Unit): AgentRefreshReply {
+    val agents = if (result.exitCode != 0) {
+        reportError(TermuxExecutionError(result))
+        null
+    } else runCatching {
         RouterProtocol.parseAgents(result.stdout).also { PebbleProtocol.agents(it, result.requestId) }
-    }.getOrNull()
+    }.onFailure(reportError).getOrNull()
     return AgentRefreshReply(agents, when {
         result.exitCode != 0 -> "refresh_failed"
         agents == null -> "invalid_agents"
@@ -86,7 +185,6 @@ internal suspend fun finishAgentRefresh(
     requestId: String, reply: AgentRefreshReply,
 ) {
     val messages = AgentsAppMessage(context)
-    messages.record(AGENT_REFRESH_OPERATION, requestId, "domain_terminal", reply.category, session)
     session ?: return
     val outcome = reply.agents?.let { messages.sendAgents(session, it, requestId) } ?:
         messages.sendTextEvent(
@@ -97,3 +195,22 @@ internal suspend fun finishAgentRefresh(
         "Could not deliver the agent refresh (${outcome.failure}).",
     )
 }
+
+internal class TermuxExecutionError(result: StoredResult) : Exception(
+    result.errorMessage.ifBlank { "Termux command exited with status ${result.exitCode}." },
+) {
+    val exitCode = result.exitCode
+    val errorCode = result.errorCode
+    val kind = result.kind
+    val mode = result.mode
+    val standardOutput = result.stdout
+    val standardError = result.stderr
+}
+
+internal class TermuxResultEnvelopeError(
+    message: String,
+    val kind: String?,
+    val action: String?,
+    val data: String?,
+    val availableExtras: List<String>,
+) : IllegalArgumentException(message)

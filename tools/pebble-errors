@@ -1,0 +1,172 @@
+#!/usr/bin/env node
+import {spawnSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
+import {parseArgs} from 'node:util';
+import {collectEvidence} from './lib/collect-evidence.mjs';
+
+const USAGE = `Usage:
+  pebble-errors recent [--since 30d] [--source agents/watch] [--limit 200] [--json]
+  pebble-errors search QUERY [--since 30d] [--source cpap/pkjs] [--limit 200] [--json]
+  pebble-errors status
+  pebble-errors collect [--adb SERIAL] [--since 30d] [--limit 5000] [--out DIR] [--coredump]
+
+Environment:
+  PEBBLE_DIAGNOSTICS_URL       default: https://pebble.exe.xyz
+  PEBBLE_DIAGNOSTICS_READ_KEY  overrides macOS Keychain lookup
+`;
+
+function readKey() {
+  if (process.env.PEBBLE_DIAGNOSTICS_READ_KEY) return process.env.PEBBLE_DIAGNOSTICS_READ_KEY;
+  if (process.platform !== 'darwin') {
+    throw new Error('set PEBBLE_DIAGNOSTICS_READ_KEY (macOS can use Keychain instead)');
+  }
+  const account = process.env.PEBBLE_DIAGNOSTICS_KEYCHAIN_ACCOUNT || process.env.USER;
+  const result = spawnSync('/usr/bin/security', [
+    'find-generic-password', '-w', '-a', account, '-s', 'pebble-diagnostics-read',
+  ], {encoding: 'utf8'});
+  if (result.error) throw result.error;
+  if (result.status !== 0 || !result.stdout.trim()) {
+    throw new Error(`read key not found in macOS Keychain for account ${account}`);
+  }
+  return result.stdout.trim();
+}
+
+export function totalLimit(value) {
+  const limit = Number(value || 200);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000) {
+    throw new Error('--limit must be an integer from 1 to 5000');
+  }
+  return limit;
+}
+
+export function createApiClient({base, key, fetchImpl = fetch}) {
+  const endpoint = base.replace(/\/$/, '');
+  return async (path, params = {}) => {
+    const url = new URL(`${endpoint}${path}`);
+    for (const [name, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') url.searchParams.set(name, value);
+    }
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: {'X-Pebble-Diagnostics-Key': key},
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(body?.error?.message || `Pebble Diagnostics returned HTTP ${response.status}`);
+    }
+    return body;
+  };
+}
+
+export async function fetchRecords(request, path, options) {
+  const wanted = totalLimit(options.limit);
+  const records = [];
+  let before = null;
+  while (records.length < wanted) {
+    const page = await request(path, {
+      since: options.since || '30d',
+      source: options.source,
+      limit: Math.min(500, wanted - records.length),
+      before,
+      q: options.q,
+    });
+    if (!Array.isArray(page.records)) throw new Error('server returned an invalid records response');
+    records.push(...page.records.slice(0, wanted - records.length));
+    if (page.next && page.next === before) throw new Error('server returned a repeated page cursor');
+    before = page.next;
+    if (!before || page.records.length === 0) break;
+  }
+  return records;
+}
+
+function printHuman(records) {
+  if (records.length === 0) {
+    process.stdout.write('No errors found.\n');
+    return;
+  }
+  for (const record of records) {
+    process.stdout.write(`${record.at}  ${record.source}\n`);
+    process.stdout.write(`  while ${record.while}\n`);
+    const serialized = JSON.stringify(record.error, null, 2).replaceAll('\n', '\n  ');
+    process.stdout.write(`  ${serialized}\n`);
+  }
+}
+
+async function main() {
+  const parsed = parseArgs({args: process.argv.slice(2), allowPositionals: true, options: {
+    since: {type: 'string'}, source: {type: 'string'}, limit: {type: 'string'},
+    adb: {type: 'string'}, out: {type: 'string'}, coredump: {type: 'boolean'},
+    json: {type: 'boolean'}, help: {type: 'boolean'},
+  }});
+  const positional = parsed.positionals, options = parsed.values;
+  if (options.help) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const command = positional[0];
+  const valid = (command === 'status' && positional.length === 1)
+    || (command === 'recent' && positional.length === 1)
+    || (command === 'search' && positional.length === 2)
+    || (command === 'collect' && positional.length === 1);
+  if (!valid) throw new Error(USAGE.trim());
+  const allowedOptions = {
+    recent: new Set(['since', 'source', 'limit', 'json']),
+    search: new Set(['since', 'source', 'limit', 'json']),
+    status: new Set(),
+    collect: new Set(['adb', 'since', 'limit', 'out', 'coredump']),
+  }[command];
+  const unsupported = Object.keys(options).filter((name) => !allowedOptions.has(name));
+  if (unsupported.length) throw new Error(`unsupported option for ${command}: --${unsupported[0]}`);
+  if (command === 'collect') {
+    const since = options.since || '30d';
+    const limit = totalLimit(options.limit || 5000);
+    let server;
+    try {
+      const request = createApiClient({
+        base: process.env.PEBBLE_DIAGNOSTICS_URL || 'https://pebble.exe.xyz',
+        key: readKey(),
+      });
+      server = {records: await fetchRecords(request, '/v1/errors', {since, limit})};
+    } catch (error) {
+      server = {error: error.message};
+    }
+    const result = await collectEvidence({
+      adbSerial: options.adb, since, limit, out: options.out,
+      coredump: options.coredump === true, server,
+    });
+    process.stdout.write(`Pebble evidence saved to ${result.root}\n`);
+    if (result.manifest.warnings.length) {
+      process.stdout.write(`${result.manifest.warnings.length} source warning(s); see manifest.json\n`);
+    }
+    if (!result.hasEvidence) {
+      process.stderr.write('No evidence source could be collected; see manifest.json\n');
+      process.exitCode = 1;
+    }
+    return;
+  }
+  const request = createApiClient({
+    base: process.env.PEBBLE_DIAGNOSTICS_URL || 'https://pebble.exe.xyz',
+    key: readKey(),
+  });
+  if (command === 'status') {
+    process.stdout.write(`${JSON.stringify(await request('/v1/status'), null, 2)}\n`);
+    return;
+  }
+  let records;
+  if (command === 'recent') {
+    records = await fetchRecords(request, '/v1/errors', options);
+  } else if (command === 'search') {
+    records = await fetchRecords(request, '/v1/errors/search', {...options, q: positional[1]});
+  }
+  if (options.json) process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
+  else printHuman(records);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  });
+}

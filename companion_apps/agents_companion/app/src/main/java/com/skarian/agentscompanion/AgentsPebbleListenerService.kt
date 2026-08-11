@@ -50,10 +50,11 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
         val session = PebbleSession(watchappUUID, watch.value)
         val messages = AgentsAppMessage(this)
         state.savePebbleSession(session)
+        messages.receiveWatchError(session, data)?.let { return it }
         return try {
             val request = PebbleProtocol.parseWatchRequest(data)
             val requestId = request.requestId ?: "refresh"
-            messages.messageReceived(session, request.command.name.lowercase(), requestId)
+            messages.open(session)
             when (request.command) {
                 WatchCommand.REFRESH_AGENTS -> startAgentRefresh(session, requestId, state, messages)
                 WatchCommand.RECONCILE -> coroutineScope.launch {
@@ -64,7 +65,7 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
             }
             ReceiveResult.Ack
         } catch (error: Exception) {
-            messages.record("request", "invalid", "domain_failure", "invalid_request", session)
+            agentsErrorReporter(this).report(error, "handling a watch request")
             state.saveBridgeError(error.message ?: "Watch request failed.")
             ReceiveResult.Nack
         }
@@ -78,11 +79,10 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
     ) {
         val admission = messages.beginRead(session, AGENT_REFRESH_OPERATION, requestId)
         when (admission.status) {
-            AppMessageSession.ReadStatus.STARTED -> if (
-                runCatching {
-                    TermuxCommandRunner(this).refreshAgents(requestId, session.watchId)
-                }.isFailure
-            ) {
+            AppMessageSession.ReadStatus.STARTED -> runCatching {
+                TermuxCommandRunner(this).refreshAgents(requestId, session.watchId)
+            }.onFailure { error ->
+                agentsErrorReporter(this).report(error, "starting an agent refresh")
                 state.saveBridgeError("Could not start the agent refresh.")
                 coroutineScope.launch {
                     val reply = AgentRefreshReply(null, "refresh_failed")
@@ -172,9 +172,6 @@ class AgentsPebbleListenerService : BasePebbleListenerService() {
                 replayTurn(session, requestId, state, rebind = true)
             }
             TurnClaim.CONFLICT -> {
-                AgentsAppMessage(this).record(
-                    "send", requestId, "domain_failure", "request_identity_mismatch",
-                )
                 throw IllegalArgumentException("Request identity conflict.")
             }
             TurnClaim.BUSY -> coroutineScope.launch {

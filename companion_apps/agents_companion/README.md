@@ -100,10 +100,9 @@ are rendered as **STATUS UNKNOWN** and are never automatically resubmitted.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The setup screen's **Copy connection diagnostics** action exports the newest 64
-payload-free AppMessage fault incidents. Routine successes are live-only. Exact
-UI, logcat, and debug-APK retrieval steps
-are in [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md).
+The setup screen can optionally send source errors from the Android companion
+and watch to Pebble Diagnostics using the shared Diagnostic key. See
+[`../../docs/error-reporting.md`](../../docs/error-reporting.md).
 
 ## Phone setup
 

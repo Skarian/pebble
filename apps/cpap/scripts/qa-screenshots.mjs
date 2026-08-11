@@ -213,8 +213,8 @@ async function triggerRequest(qa, scratch) {
     buttons: ['select']});
 }
 
-async function captureState(qa, name, label, buttons = [], message = null) {
-  return qa.capture(label, {buttons, message}, {name, slug: name});
+async function captureState(qa, name, label, buttons = [], message = null, options = {}) {
+  return qa.capture(label, {buttons, message, ...options}, {name, slug: name});
 }
 
 async function verifySameScreen(qa, scratch, name, expected, buttons = [], message = null) {
@@ -256,6 +256,7 @@ export async function main() {
         gapX: 12, gapY: 36, background: '#0d100e', foreground: '#f1f3ec', pointSize: 12,
       },
       manifest: ({result}) => ({
+        source: dataSource,
         productionPbw: join(ROOT, 'build/cpap.pbw'),
         liveIncluded: dataSource === 'live',
         liveApiCalls: result.finalStatus.liveApiCalls,
@@ -366,10 +367,13 @@ export async function main() {
 
     const timeoutId = nextId('phone-response-timeout');
     await setScenario(token, {id: timeoutId, type: 'loading'});
-    const timeoutRequestId = nextWatchRequestId();
+    nextWatchRequestId();
     await triggerRequest(qa, scratch);
-    await captureState(qa, 'phone-timeout', 'PHONE RESPONSE TIMEOUT', [],
-      statusMessage(8, timeoutRequestId));
+    // STATUS_RESPONSE_TIMEOUT is watch-local, not part of the PKJS wire
+    // protocol. Let all three same-ID read attempts expire so this screenshot
+    // exercises the real coordinator failure path.
+    await captureState(qa, 'phone-timeout', 'PHONE RESPONSE TIMEOUT', [], null,
+      {waitMs: 93000});
 
     const recoveryId = nextId('recovery');
     await setScenario(token, {id: recoveryId, type: 'records', records: fullRecords});

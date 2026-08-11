@@ -9,6 +9,7 @@
 #define PAGE_COUNT 5
 #define CACHE_VERSION 6
 #define PERSIST_KEY_CACHE 4102
+#define PERSIST_ERRORS_KEY 4160
 #define UNAVAILABLE INT32_MIN
 #define PROTOCOL_VERSION 2
 #define FLAG_STALE 0x01
@@ -42,6 +43,7 @@ typedef struct {
 static Window *s_window;
 static Layer *s_canvas;
 static AppMessageClient *s_phone;
+static ErrorReporter *s_errors;
 static AirCache s_cache;
 static bool s_has_cache;
 static bool s_loading;
@@ -50,6 +52,9 @@ static uint8_t s_status = STATUS_LOADING;
 static uint8_t s_page;
 static uint8_t s_scale = DEFAULT_SCALE;
 static uint8_t s_pending_scale = DEFAULT_SCALE;
+#define report_error(function, code, symbol, while_doing) \
+  ERROR_REPORT(s_errors, ((ErrorValue){ \
+    (function), (code), (symbol), NULL}), (while_doing))
 
 static const char *METRIC_NAMES[] = {"CO2", "TEMP", "RH", "PRESSURE"};
 static const char *GRAPH_NAMES[] = {"CO2", "TEMP", "HUMIDITY", "PRESSURE"};
@@ -371,7 +376,7 @@ static void phone_request_failed(
   s_scale_loading = false;
   s_status = failure->failure == APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT
       ? STATUS_RESPONSE_TIMEOUT : STATUS_COMPANION;
-  if (s_canvas) layer_mark_dirty(s_canvas);
+  layer_mark_dirty(s_canvas);
 }
 
 static void request_data(uint8_t command) {
@@ -383,6 +388,7 @@ static void request_data(uint8_t command) {
       NULL, APP_MESSAGE_SEND_PRIMARY);
   if (result != APP_MESSAGE_START_STARTED &&
       result != APP_MESSAGE_START_COALESCED) {
+    report_error("app_message_client_start", result, "APP_MESSAGE_START_FAILED", command == COMMAND_SCALE ? "changing Air Quality chart scale" : "refreshing Air Quality data");
     s_loading = false;
     s_scale_loading = false;
     s_status = STATUS_COMPANION;
@@ -392,9 +398,24 @@ static void request_data(uint8_t command) {
 
 static void request_refresh(void) { request_data(COMMAND_FETCH); }
 
-static int32_t tuple_i32(DictionaryIterator *iter, uint32_t key, int32_t fallback) {
+static int32_t tuple_i32(
+    DictionaryIterator *iter, uint32_t key, int32_t fallback, bool *valid) {
   Tuple *tuple = dict_find(iter, key);
-  return tuple ? tuple->value->int32 : fallback;
+  if (!tuple) return fallback;
+  int32_t value;
+  if (app_message_tuple_int(tuple, &value)) return value;
+  if (valid) *valid = false;
+  return fallback;
+}
+
+static uint32_t tuple_u32(
+    DictionaryIterator *iter, uint32_t key, uint32_t fallback, bool *valid) {
+  Tuple *tuple = dict_find(iter, key);
+  if (!tuple) return fallback;
+  uint32_t value;
+  if (app_message_tuple_uint(tuple, &value)) return value;
+  if (valid) *valid = false;
+  return fallback;
 }
 
 static AppMessageResponseAction receive_response(
@@ -403,14 +424,25 @@ static AppMessageResponseAction receive_response(
     void *context) {
   (void)context;
   Tuple *protocol = dict_find(iter, MESSAGE_KEY_PROTOCOL);
-  if (!protocol || protocol->value->uint8 != PROTOCOL_VERSION) {
+  uint32_t protocol_value;
+  bool protocol_parsed = app_message_tuple_uint(protocol, &protocol_value);
+  if (!protocol_parsed || protocol_value != PROTOCOL_VERSION) {
+    report_error("receive_response", protocol_parsed ? (int32_t)protocol_value : -1,
+        "PROTOCOL_VERSION_MISMATCH", "parsing Air Quality response");
     return APP_MESSAGE_RESPONSE_IGNORE;
   }
   Tuple *status = dict_find(iter, MESSAGE_KEY_STATUS);
-  if (!status) return APP_MESSAGE_RESPONSE_IGNORE;
+  uint32_t status_value;
+  bool status_parsed = app_message_tuple_uint(status, &status_value);
+  if (!status_parsed || status_value > STATUS_PARTIAL) {
+    report_error("receive_response", status_parsed ? (int32_t)status_value : -1,
+        status ? "STATUS_INVALID" : "STATUS_MISSING",
+        "parsing Air Quality response");
+    return APP_MESSAGE_RESPONSE_IGNORE;
+  }
   bool scale_response = request->operation == COMMAND_SCALE;
   bool cached_progress = false;
-  s_status = status->value->uint8;
+  s_status = (uint8_t)status_value;
   if (scale_response && s_status != STATUS_OK && s_status != STATUS_PARTIAL) {
     s_scale_loading = false;
     s_loading = false;
@@ -421,7 +453,13 @@ static AppMessageResponseAction receive_response(
   if (s_status == STATUS_OK || s_status == STATUS_PARTIAL) {
     Tuple *observed = dict_find(iter, MESSAGE_KEY_OBSERVED_AT);
     Tuple *location = dict_find(iter, MESSAGE_KEY_LOCATION);
-    if (!observed || !location || !dict_find(iter, MESSAGE_KEY_CO2)) {
+    uint32_t observed_at;
+    const char *location_text;
+    if (!app_message_tuple_uint(observed, &observed_at) ||
+        !app_message_tuple_cstring(location, &location_text) ||
+        location->length > sizeof(s_cache.location) ||
+        !dict_find(iter, MESSAGE_KEY_CO2)) {
+      report_error("receive_response", s_status, "SNAPSHOT_FIELDS_MISSING", "parsing Air Quality snapshot");
       s_scale_loading = false;
       s_loading = false;
       if (scale_response) s_pending_scale = s_scale;
@@ -429,9 +467,13 @@ static AppMessageResponseAction receive_response(
       layer_mark_dirty(s_canvas);
       return APP_MESSAGE_RESPONSE_DONE;
     }
-    uint8_t response_flags = (uint8_t)tuple_i32(iter, MESSAGE_KEY_FLAGS, 0);
+    bool fields_valid = true;
+    int32_t raw_flags = tuple_i32(
+        iter, MESSAGE_KEY_FLAGS, 0, &fields_valid);
+    if (raw_flags < 0 || raw_flags > UINT8_MAX) fields_valid = false;
+    uint8_t response_flags = fields_valid ? (uint8_t)raw_flags : 0;
     cached_progress = !scale_response && (response_flags & FLAG_CACHED);
-    if (s_has_cache && observed->value->uint32 < s_cache.observed_at) {
+    if (s_has_cache && observed_at < s_cache.observed_at) {
       if (cached_progress) {
         s_loading = true;
       } else {
@@ -445,16 +487,25 @@ static AppMessageResponseAction receive_response(
     AirCache next;
     memset(&next, 0, sizeof(next)); next.version = CACHE_VERSION;
     next.flags = response_flags;
-    next.co2_state = (uint8_t)tuple_i32(iter, MESSAGE_KEY_CO2_STATE, 0);
-    int32_t battery = tuple_i32(iter, MESSAGE_KEY_BATTERY, 255);
+    int32_t co2_state = tuple_i32(
+        iter, MESSAGE_KEY_CO2_STATE, 0, &fields_valid);
+    if (co2_state < 0 || co2_state > UINT8_MAX) fields_valid = false;
+    next.co2_state = fields_valid ? (uint8_t)co2_state : 0;
+    int32_t battery = tuple_i32(
+        iter, MESSAGE_KEY_BATTERY, 255, &fields_valid);
     next.battery = battery >= 0 && battery <= 100 ? (uint8_t)battery : 255;
-    next.scale = (uint8_t)tuple_i32(iter, MESSAGE_KEY_SCALE, s_scale);
-    if (next.scale >= SCALE_COUNT) next.scale = DEFAULT_SCALE;
-    s_scale = next.scale;
-    next.observed_at = observed->value->uint32;
-    next.window_start = (uint32_t)tuple_i32(iter, MESSAGE_KEY_WINDOW_START, 0);
-    next.point_count = (uint8_t)tuple_i32(iter, MESSAGE_KEY_POINT_COUNT, 0);
-    snprintf(next.location, sizeof(next.location), "%s", location->value->cstring);
+    int32_t raw_scale = tuple_i32(
+        iter, MESSAGE_KEY_SCALE, s_scale, &fields_valid);
+    if (raw_scale < 0 || raw_scale >= SCALE_COUNT) fields_valid = false;
+    next.scale = fields_valid ? (uint8_t)raw_scale : DEFAULT_SCALE;
+    next.observed_at = observed_at;
+    next.window_start = tuple_u32(
+        iter, MESSAGE_KEY_WINDOW_START, 0, &fields_valid);
+    int32_t point_count = tuple_i32(
+        iter, MESSAGE_KEY_POINT_COUNT, 0, &fields_valid);
+    if (point_count < 0 || point_count > UINT8_MAX) fields_valid = false;
+    next.point_count = fields_valid ? (uint8_t)point_count : 0;
+    snprintf(next.location, sizeof(next.location), "%s", location_text);
     const uint32_t current_keys[] = {MESSAGE_KEY_CO2, MESSAGE_KEY_TEMP_X10,
       MESSAGE_KEY_HUMIDITY_X10, MESSAGE_KEY_PRESSURE_X10};
     const uint32_t series_keys[] = {MESSAGE_KEY_SERIES_CO2,
@@ -465,19 +516,34 @@ static AppMessageResponseAction receive_response(
       MESSAGE_KEY_AVG_PRESSURE_X10};
     bool chart_valid = next.point_count == GRAPH_COLUMNS;
     for (int metric = 0; metric < METRICS; metric++) {
-      next.current[metric] = tuple_i32(iter, current_keys[metric], UNAVAILABLE);
-      next.average[metric] = tuple_i32(iter, average_keys[metric], UNAVAILABLE);
+      next.current[metric] = tuple_i32(
+          iter, current_keys[metric], UNAVAILABLE, &fields_valid);
+      next.average[metric] = tuple_i32(
+          iter, average_keys[metric], UNAVAILABLE, &fields_valid);
       Tuple *series = dict_find(iter, series_keys[metric]);
-      if (!series || series->length != GRAPH_COLUMNS * 2) {
+      const uint8_t *bytes;
+      uint16_t series_length;
+      if (!app_message_tuple_data(series, &bytes, &series_length) ||
+          series->length != GRAPH_COLUMNS * 2) {
+        if (series) {
+          report_error("receive_response", series->length,
+              "SERIES_TYPE_OR_LENGTH_INVALID", "parsing Air Quality history");
+        } else {
+          report_error("receive_response", metric, "SERIES_MISSING", "parsing Air Quality history");
+        }
         chart_valid = false;
         continue;
       }
-      const uint8_t *bytes = series->value->data;
       for (int column = 0; column < GRAPH_COLUMNS; column++) {
         int offset = column * 2;
         uint16_t raw = (uint16_t)bytes[offset] | ((uint16_t)bytes[offset + 1] << 8);
         next.series[metric][column] = (int16_t)raw;
       }
+    }
+    if (!fields_valid) {
+      report_error("receive_response", s_status, "SNAPSHOT_FIELD_INVALID",
+          "parsing Air Quality snapshot");
+      chart_valid = false;
     }
     if (!chart_valid) {
       s_scale_loading = false;
@@ -487,8 +553,12 @@ static AppMessageResponseAction receive_response(
       layer_mark_dirty(s_canvas);
       return APP_MESSAGE_RESPONSE_DONE;
     }
+    s_scale = next.scale;
     s_cache = next; s_has_cache = true;
-    persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
+    int written = persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
+    if (written != (int)sizeof(s_cache)) {
+      report_error("persist_write_data", written, "PERSIST_WRITE_FAILED", "saving Air Quality response");
+    }
     if (cached_progress) {
       s_loading = true;
       s_scale_loading = false;
@@ -530,6 +600,7 @@ static void click_config(void *context) {
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   s_canvas = layer_create(layer_get_bounds(root));
+  ERROR_REPORT_NULL(s_errors, s_canvas, "layer_create", "creating Air Quality screen");
   layer_set_update_proc(s_canvas, canvas_update);
   layer_add_child(root, s_canvas);
 }
@@ -537,20 +608,35 @@ static void window_load(Window *window) {
 static void window_unload(Window *window) { layer_destroy(s_canvas); }
 
 static void init(void) {
-  if (persist_exists(PERSIST_KEY_CACHE) && persist_get_size(PERSIST_KEY_CACHE) == sizeof(s_cache) &&
-      persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) == sizeof(s_cache) &&
-      s_cache.version == CACHE_VERSION) {
-    s_has_cache = true; s_status = STATUS_OK;
-    s_scale = s_cache.scale < SCALE_COUNT ? s_cache.scale : DEFAULT_SCALE;
+  s_errors = error_reporter_create(&(ErrorReporterConfig){
+    .persist_key = PERSIST_ERRORS_KEY,
+    .storage_bytes = 2048,
+  });
+  if (!s_errors) {
+    APP_LOG(APP_LOG_LEVEL_ERROR,
+        "pebble-errors source=air-quality/watch reporter=create_failed");
+  }
+  if (persist_exists(PERSIST_KEY_CACHE)) {
+    int size = persist_get_size(PERSIST_KEY_CACHE);
+    int result = size == (int)sizeof(s_cache)
+        ? persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) : size;
+    if (result == (int)sizeof(s_cache) && s_cache.version == CACHE_VERSION) {
+      s_has_cache = true; s_status = STATUS_OK;
+      s_scale = s_cache.scale < SCALE_COUNT ? s_cache.scale : DEFAULT_SCALE;
+    } else {
+      report_error("persist_read_data", result, "CACHE_RECORD_INVALID", "loading Air Quality cache");
+    }
   }
   s_window = window_create();
+  ERROR_REPORT_NULL(s_errors, s_window, "window_create", "creating Air Quality screen");
   window_set_background_color(s_window, GColorWhite);
-  window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
+  window_set_window_handlers(s_window,
+      (WindowHandlers){.load = window_load, .unload = window_unload});
   window_set_click_config_provider(s_window, click_config);
   AppMessageClientConfig phone_config = {
     .app_name = "air-quality",
     .inbox_size = 2048,
-    .outbox_size = 64,
+    .outbox_size = PEBBLE_ERROR_OUTBOX_BYTES,
     .protocol = {
       .protocol_key = MESSAGE_KEY_PROTOCOL,
       .command_key = MESSAGE_KEY_COMMAND,
@@ -562,6 +648,7 @@ static void init(void) {
     .write_payload = write_request,
     .response_received = receive_response,
     .request_failed = phone_request_failed,
+    .errors = s_errors,
   };
   AppMessageResult open_result;
   s_phone = app_message_client_open(&phone_config, &open_result);
@@ -577,6 +664,7 @@ static void init(void) {
 static void deinit(void) {
   app_message_client_close(s_phone);
   window_destroy(s_window);
+  error_reporter_destroy(s_errors);
 }
 
 int main(void) { init(); app_event_loop(); deinit(); }

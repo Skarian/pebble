@@ -2,7 +2,7 @@
 
 `shared/appmessage` is the transport boundary for connected Pebble apps. It
 owns AppMessage lifecycle, READY announcements, serialized delivery, bounded
-retry, request correlation, replayable reads, and payload-free diagnostics.
+retry, request correlation, replayable reads, and error-reporter hooks.
 Apps still own their dictionaries, domain work, persistence, and screen policy.
 
 The three runtime entry points are:
@@ -20,10 +20,10 @@ The three runtime entry points are:
 - Reads are single-flight and may replay a completed result.
 - A delivered mutation reconciles its original ID instead of submitting again.
 - Phone sends and multipart batches are serialized and stop at the failed part.
-- Persistent logs retain only bounded, payload-free fault incidents; routine
-  lifecycle and success events remain live-only.
+- Transport failures are passed to the optional shared error reporter as their
+  original SDK result or exception. AppMessage itself owns no persistent log.
 
-The watch implementation reserves AppMessage key `127` for its private outbox
+The watch implementation reserves AppMessage key `255` for its private outbox
 attempt token. Do not declare or write that key in an app protocol. The token is
 not a session-generation value and is never required in phone replies.
 The machine-readable invariant list is in
@@ -83,7 +83,6 @@ val messages = AppMessageSession(context, WATCHAPP_UUID, "example")
 messages.open(watchId)
 scope.launch { messages.announceReady(watchId, phoneReadyDictionary()) }
 
-messages.messageReceived(watchId, "refresh", requestId)
 messages.beginRead(watchId, "refresh", requestId).launch(scope) {
     val reply = fetchSnapshot()
     messages.send(watchId, "refresh", requestId, reply)
@@ -120,5 +119,6 @@ var messages = createAppMessageSession({
 messages.open();
 ```
 
-See [`../../docs/appmessage-diagnostics.md`](../../docs/appmessage-diagnostics.md)
-for the persistent incident ring and retrieval commands.
+AppMessage can forward optional watch source errors through the independent
+reporter described in
+[`../../docs/error-reporting.md`](../../docs/error-reporting.md).

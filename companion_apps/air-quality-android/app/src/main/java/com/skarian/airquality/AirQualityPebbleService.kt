@@ -2,6 +2,7 @@ package com.skarian.airquality
 
 import android.util.Log
 import com.skarian.pebble.appmessage.AppMessageSession
+import com.skarian.pebble.errors.ErrorReporter
 import io.rebble.pebblekit2.client.BasePebbleListenerService
 import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.ReceiveResult
@@ -23,6 +24,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
 
     private val appUuid = UUID.fromString(PebbleProtocol.APP_UUID)
     private val historyMutex = Mutex()
+    private val errors by lazy { airErrorReporter(this) }
     private val appMessages by lazy { appMessageSession(this) }
     private val requestPipeline by lazy {
         AirQualityRequestPipeline(
@@ -32,6 +34,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
             deliver = ::deliverResponse,
             deliverReplay = ::deliverReplay,
             scheduleHistoryRepair = ::scheduleHistoryRepair,
+            reportError = { errors.report(it, "reading live air quality") },
         )
     }
     override suspend fun onMessageReceived(
@@ -40,14 +43,17 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         watch: WatchIdentifier,
     ): ReceiveResult {
         if (watchappUUID != appUuid) return ReceiveResult.Nack
+        appMessages.receiveWatchError(watch.value, data)?.let { return it }
+        val reporter = errors
         if (PebbleProtocol.number(data, PebbleProtocol.PROTOCOL) != PebbleProtocol.PROTOCOL_VERSION) {
-            return ReceiveResult.Nack
+            return rejectRequest(reporter, data, "Air Quality protocol version is missing or unsupported.")
         }
         val command = PebbleProtocol.number(data, PebbleProtocol.COMMAND)
         if (command != PebbleProtocol.COMMAND_FETCH && command != PebbleProtocol.COMMAND_SCALE) {
-            return ReceiveResult.Ack
+            return rejectRequest(reporter, data, "Air Quality request command is missing or unsupported.")
         }
-        val requestId = PebbleProtocol.number(data, PebbleProtocol.REQUEST_ID) ?: return ReceiveResult.Nack
+        val requestId = PebbleProtocol.number(data, PebbleProtocol.REQUEST_ID)
+            ?: return rejectRequest(reporter, data, "Air Quality request id is missing.")
         val request = AirQualityRequest(
             requestId = requestId,
             command = command,
@@ -55,7 +61,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
             watchId = watch.value,
         )
         AirQualityDailySync.schedule(this)
-        appMessages.messageReceived(watch.value, operation(request), request.requestId.toString())
+        appMessages.open(watch.value)
 
         val admission = appMessages.beginRead(
             watch.value,
@@ -84,14 +90,21 @@ class AirQualityPebbleService : BasePebbleListenerService() {
                     request.watchId, READ_OPERATION, request.requestId.toString(),
                 )
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 appMessages.abandonRead(
                     request.watchId, READ_OPERATION, request.requestId.toString(),
                 )
-                record(request, operation(request), "domain_failure", "request_failed")
+                errors.report(error, "handling an air-quality request")
             }
         }
         return if (admission.status == AppMessageSession.ReadStatus.CONFLICT) {
+            reporter.report(
+                AirQualityRequestError(
+                    "Air Quality request identity conflicts with the active request.",
+                    request.requestId, request.command, request.scale.name, data.keys.map(UInt::toLong),
+                ),
+                "admitting an air-quality request",
+            )
             ReceiveResult.Nack
         } else {
             ReceiveResult.Ack
@@ -132,7 +145,6 @@ class AirQualityPebbleService : BasePebbleListenerService() {
             it.snapshot(address, settings.watchName, now, request.scale)
         }
         if (snapshot != null) {
-            record(request, "cached_snapshot", "cached_response")
             return AirQualityResponse(
                 operation = "cached_snapshot",
                 data = PebbleProtocol.snapshot(snapshot, request.requestId, now, cached = true),
@@ -153,7 +165,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         val settings = CompanionSettings(this)
         val address = settings.sensorAddress?.takeUnless(String::isBlank)
             ?: return domainResponse(request, "live_scan", PebbleProtocol.STATUS_SETUP, "setup")
-        val scanner = AranetScanner(this)
+        val scanner = AranetScanner(this, errors)
         if (!scanner.hasPermissions()) {
             return domainResponse(request, "live_scan", PebbleProtocol.STATUS_PERMISSION, "permission")
         }
@@ -163,7 +175,6 @@ class AirQualityPebbleService : BasePebbleListenerService() {
             )
         }
 
-        record(request, "live_scan", "scan_started")
         val reading = suspendCancellableCoroutine { continuation ->
             val cancelScan = scanner.readOnce(address) { result ->
                 if (continuation.isActive) continuation.resume(result)
@@ -183,7 +194,6 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         } ?: return domainResponse(
             request, "live_snapshot", PebbleProtocol.STATUS_SERVICE, "snapshot_unavailable",
         )
-        record(request, "live_scan", "scan_succeeded", finalCategory = "ok")
         return AirQualityResponse(
             operation = "live_snapshot",
             data = PebbleProtocol.snapshot(snapshot, request.requestId, now),
@@ -220,10 +230,13 @@ class AirQualityPebbleService : BasePebbleListenerService() {
 
     private fun scheduleHistoryRepair(request: AirQualityRequest) {
         coroutineScope.launch {
-            val settings = CompanionSettings(this@AirQualityPebbleService)
-            val address = settings.sensorAddress?.takeUnless(String::isBlank) ?: return@launch
-            record(request, "history_repair", "history_scheduled")
-            backfillHistoryIfNeeded(request, address, settings.watchName, request.scale)
+            try {
+                val settings = CompanionSettings(this@AirQualityPebbleService)
+                val address = settings.sensorAddress?.takeUnless(String::isBlank) ?: return@launch
+                backfillHistoryIfNeeded(request, address, settings.watchName, request.scale)
+            } catch (error: Throwable) {
+                errors.report(error, "repairing air-quality history")
+            }
         }
     }
 
@@ -233,7 +246,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         location: String,
         scale: ChartScale,
     ) = historyMutex.withLock {
-        val scanner = AranetScanner(this)
+        val scanner = AranetScanner(this, errors)
         if (!scanner.hasPermissions() || !scanner.bluetoothEnabled()) return@withLock
         val now = Instant.now().epochSecond
         val (lookbackSeconds, current) = ReadingStore(this).use { store ->
@@ -241,9 +254,8 @@ class AirQualityPebbleService : BasePebbleListenerService() {
                 store.snapshot(address, location, now, scale)?.current
         }
         if (lookbackSeconds == null || current == null) return@withLock
-        record(request, "history_repair", "history_started")
         val result = suspendCancellableCoroutine<Result<List<AranetReading>>> { continuation ->
-            AranetHistoryReader(applicationContext).import(
+            AranetHistoryReader(applicationContext, errors).import(
                 address = address,
                 deviceName = current.deviceName,
                 batteryPercent = current.batteryPercent,
@@ -256,15 +268,8 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         result.onSuccess { readings ->
             ReadingStore(this).use { it.saveAll(readings) }
             Log.i(HISTORY_LOG_TAG, "Backfilled ${readings.size} saved readings")
-            record(request, "history_repair", "history_succeeded", finalCategory = "ok")
         }.onFailure {
             Log.w(HISTORY_LOG_TAG, "Automatic history backfill failed")
-            record(
-                request,
-                "history_repair",
-                "domain_failure",
-                finalCategory = "history_unavailable",
-            )
         }
     }
 
@@ -273,42 +278,55 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         operation: String,
         status: Int,
         category: String,
-    ): AirQualityResponse {
-        record(request, operation, "domain_failure", finalCategory = category)
-        return AirQualityResponse(
-            operation = operation,
-            data = PebbleProtocol.status(status, request.requestId),
-            domainCategory = category,
-        )
-    }
+    ) = AirQualityResponse(
+        operation = operation,
+        data = PebbleProtocol.status(status, request.requestId),
+        domainCategory = category,
+    )
 
-    private fun operation(request: AirQualityRequest): String =
-        if (request.command == PebbleProtocol.COMMAND_SCALE) "scale" else "refresh"
-
-    private fun record(
-        request: AirQualityRequest,
-        operation: String,
-        event: String,
-        finalCategory: String = "",
-    ) {
-        appMessages.record(
-            operation,
-            request.requestId.toString(),
-            event,
-            finalCategory,
-            request.watchId,
+    private fun rejectRequest(
+        reporter: ErrorReporter,
+        data: PebbleDictionary,
+        message: String,
+    ): ReceiveResult {
+        reporter.report(
+            AirQualityRequestError(
+                message,
+                PebbleProtocol.number(data, PebbleProtocol.REQUEST_ID),
+                PebbleProtocol.number(data, PebbleProtocol.COMMAND),
+                null,
+                data.keys.map(UInt::toLong),
+            ),
+            "parsing an air-quality watch request",
         )
+        return ReceiveResult.Nack
     }
 
     companion object {
-        private const val APP_NAME = "air_quality"
         private const val HISTORY_LOG_TAG = "AirQualityHistory"
         private const val READ_OPERATION = "air_quality_read"
 
         fun appMessageSession(context: android.content.Context) = AppMessageSession(
             context.applicationContext,
             UUID.fromString(PebbleProtocol.APP_UUID),
-            APP_NAME,
+            airErrorReporter(context),
+            "air-quality/watch@0.10.0",
         )
     }
+}
+
+internal class AirQualityRequestError(
+    message: String,
+    val requestId: Int?,
+    val command: Int?,
+    val scale: String?,
+    val keys: List<Long>,
+) : IllegalArgumentException(message)
+
+internal fun airErrorReporter(context: android.content.Context): ErrorReporter = ErrorReporter.create(
+    context.applicationContext,
+    "air-quality/android@${BuildConfig.VERSION_NAME}",
+) {
+    val settings = CompanionSettings(context.applicationContext, ErrorReporter.Disabled)
+    listOfNotNull(settings.sensorAddress, settings.sensorName, settings.watchName)
 }

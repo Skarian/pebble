@@ -2,8 +2,6 @@ package com.skarian.agentscompanion
 
 import android.Manifest
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -32,6 +30,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var agentsStatus: TextView
     private lateinit var pebbleStatus: TextView
     private lateinit var latestStatus: TextView
+    private lateinit var errorReportingStatus: TextView
     private lateinit var progress: ProgressBar
     private lateinit var grantTermux: Button
     private lateinit var grantNotifications: Button
@@ -40,6 +39,7 @@ class MainActivity : ComponentActivity() {
     private var activeRequestId: String? = null
     private var pebbleJob: Job? = null
     private var connectedWatches = "Checking Core…"
+    private val errorReporter by lazy { agentsErrorReporter(this) }
 
     private val termuxPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -72,15 +72,9 @@ class MainActivity : ComponentActivity() {
         }
         refreshAgents.setOnClickListener { startCommand("Refreshing agents…") { runner.refreshAgents() } }
         runDoctor.setOnClickListener { startCommand("Checking router setup…", runner::doctor) }
-        findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener {
-            val diagnostics = AgentsAppMessage.appMessageSession(this)
-            diagnostics.replayLogcat()
-            getSystemService(ClipboardManager::class.java).setPrimaryClip(
-                ClipData.newPlainText("Agents connection diagnostics", diagnostics.exportLog()),
-            )
-            latestStatus.text = "Diagnostics copied."
+        findViewById<Button>(R.id.errorReportingButton).setOnClickListener {
+            errorReporter.openSettings(this, ::errorReportingChanged)
         }
-        AgentsAppMessage.appMessageSession(this).replayLogcat()
         render()
     }
 
@@ -95,9 +89,12 @@ class MainActivity : ComponentActivity() {
         }
         pebbleJob = lifecycleScope.launch {
             val picker = DefaultPebbleAndroidAppPicker.getInstance(this@MainActivity)
-            val selected = runCatching { picker.getCurrentlySelectedApp() }.getOrNull()
+            val selected = runCatching { picker.getCurrentlySelectedApp() }
+                .onFailure { errorReporter.report(it, "reading the selected Pebble provider") }
+                .getOrNull()
             DefaultPebbleInfoRetriever(this@MainActivity).getConnectedWatches()
                 .catch { error ->
+                    errorReporter.report(error, "reading connected Pebble watches")
                     connectedWatches = "Core unavailable: ${error.message ?: "provider error"}"
                     render()
                 }
@@ -133,6 +130,7 @@ class MainActivity : ComponentActivity() {
         agentsStatus = findViewById(R.id.agentsStatus)
         pebbleStatus = findViewById(R.id.pebbleStatus)
         latestStatus = findViewById(R.id.latestStatus)
+        errorReportingStatus = findViewById(R.id.errorReportingStatus)
         progress = findViewById(R.id.progressBar)
         grantTermux = findViewById(R.id.grantTermuxButton)
         grantNotifications = findViewById(R.id.grantNotificationsButton)
@@ -148,6 +146,7 @@ class MainActivity : ComponentActivity() {
                 renderActions()
             }
             .onFailure {
+                errorReporter.report(it, "starting a companion command")
                 activeRequestId = null
                 state.saveBridgeError(it.message ?: "Could not start Termux command.")
                 render()
@@ -194,7 +193,18 @@ class MainActivity : ComponentActivity() {
             } ?: append("\nAgents watchapp not active")
         }
         latestStatus.text = renderLatest(doctor)
+        renderErrorReporting()
         renderActions(termuxInstalled, runPermission, notificationsGranted)
+    }
+
+    private fun renderErrorReporting() {
+        val status = errorReporter.status()
+        errorReportingStatus.text = "${if (status.enabled) "Enabled" else "Disabled"} · ${status.queued} queued"
+    }
+
+    private fun errorReportingChanged() {
+        renderErrorReporting()
+        lifecycleScope.launch { AgentsAppMessage(this@MainActivity).repeatReadyForOpenWatches() }
     }
 
     private fun renderLatest(doctor: DoctorStatus?): String {

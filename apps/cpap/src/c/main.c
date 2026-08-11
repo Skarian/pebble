@@ -5,6 +5,7 @@
 #define AXIS_LEVELS 5
 #define CACHE_VERSION 3
 #define PERSIST_KEY_CACHE 100
+#define PERSIST_ERRORS_KEY 160
 #define WAKEUP_START_HOUR 10
 #define WAKEUP_LAST_HOUR 22
 #define WAKEUP_INTERVAL_HOURS 2
@@ -68,6 +69,7 @@ static TextLayer *s_state_footer_layer;
 static Layer *s_ring_layer;
 static Layer *s_graph_layer;
 static AppMessageClient *s_phone;
+static ErrorReporter *s_errors;
 
 static ScoreCache s_cache;
 static uint8_t s_selected_day;
@@ -91,6 +93,10 @@ static const char *GRAPH_TITLES[] = {
 static void request_scores(bool automatic);
 static void render(void);
 
+#define report_error(function, code, symbol, while_doing) \
+  ERROR_REPORT(s_errors, ((ErrorValue){ \
+    (function), (code), (symbol), NULL}), (while_doing))
+
 static uint32_t latest_available_date(const ScoreCache *cache) {
   for (int i = 0; i < DAYS; i++) {
     if (cache->dates[i] && cache->scores[i] <= 100) {
@@ -103,7 +109,12 @@ static uint32_t latest_available_date(const ScoreCache *cache) {
 static void schedule_next_wakeup(bool tomorrow) {
   wakeup_cancel_all();
   time_t now = time(NULL);
-  struct tm next = *localtime(&now);
+  struct tm *local = localtime(&now);
+  if (!local) {
+    report_error("localtime", 0, "LOCALTIME_FAILED", "scheduling automatic CPAP check");
+    return;
+  }
+  struct tm next = *local;
   next.tm_min = 0;
   next.tm_sec = 0;
   if (tomorrow || next.tm_hour >= WAKEUP_LAST_HOUR) {
@@ -117,6 +128,10 @@ static void schedule_next_wakeup(bool tomorrow) {
         WAKEUP_INTERVAL_HOURS;
   }
   time_t base = mktime(&next);
+  if (base == (time_t)-1) {
+    report_error("mktime", -1, "MKTIME_FAILED", "scheduling automatic CPAP check");
+    return;
+  }
   for (int attempt = 0; attempt < WAKEUP_SCHEDULE_ATTEMPTS; attempt++) {
     WakeupId id = wakeup_schedule(
       base + attempt * WAKEUP_COLLISION_STEP_SECONDS, 0, false);
@@ -124,6 +139,7 @@ static void schedule_next_wakeup(bool tomorrow) {
       APP_LOG(APP_LOG_LEVEL_INFO, "Next automatic check scheduled: %ld", (long)id);
       return;
     }
+    report_error("wakeup_schedule", id, "WAKEUP_SCHEDULE_FAILED", "scheduling automatic CPAP check");
   }
   APP_LOG(APP_LOG_LEVEL_ERROR, "Could not schedule next automatic check");
 }
@@ -171,10 +187,18 @@ static void parse_date(uint32_t packed, int *year, int *month, int *day) {
 
 static uint32_t packed_yesterday(void) {
   time_t now = time(NULL);
-  struct tm yesterday = *localtime(&now);
+  struct tm *local = localtime(&now);
+  if (!local) {
+    report_error("localtime", 0, "LOCALTIME_FAILED", "checking CPAP cache date");
+    return 0;
+  }
+  struct tm yesterday = *local;
   yesterday.tm_mday -= 1;
   yesterday.tm_hour = 12;
-  mktime(&yesterday);
+  if (mktime(&yesterday) == (time_t)-1) {
+    report_error("mktime", -1, "MKTIME_FAILED", "checking CPAP cache date");
+    return 0;
+  }
   return (uint32_t)(yesterday.tm_year + 1900) * 10000 +
          (uint32_t)(yesterday.tm_mon + 1) * 100 + yesterday.tm_mday;
 }
@@ -593,6 +617,7 @@ static void request_scores(bool automatic) {
       NULL, APP_MESSAGE_SEND_PRIMARY);
   if (result != APP_MESSAGE_START_STARTED &&
       result != APP_MESSAGE_START_COALESCED) {
+    report_error("app_message_client_start", result, "APP_MESSAGE_START_FAILED", automatic ? "running automatic CPAP check" : "refreshing CPAP data");
     if (automatic) finish_automatic_check(false, STATUS_PHONE_CONNECTION);
     else {
       s_loading = false;
@@ -604,9 +629,15 @@ static void request_scores(bool automatic) {
   if (!automatic && s_window_visible) render();
 }
 
-static uint32_t tuple_uint32(DictionaryIterator *iterator, uint32_t key, uint32_t fallback) {
+static uint32_t tuple_uint32(
+    DictionaryIterator *iterator, uint32_t key, uint32_t fallback,
+    bool *valid) {
   Tuple *tuple = dict_find(iterator, key);
-  return tuple ? tuple->value->uint32 : fallback;
+  if (!tuple) return fallback;
+  uint32_t value;
+  if (app_message_tuple_uint(tuple, &value)) return value;
+  if (valid) *valid = false;
+  return fallback;
 }
 
 static AppMessageResponseAction receive_response(
@@ -616,10 +647,19 @@ static AppMessageResponseAction receive_response(
   (void)request;
   (void)context;
   Tuple *protocol = dict_find(iterator, MESSAGE_KEY_PROTOCOL);
-  if (!protocol || protocol->value->uint8 != 1) return APP_MESSAGE_RESPONSE_IGNORE;
+  uint32_t protocol_value;
+  bool protocol_parsed = app_message_tuple_uint(protocol, &protocol_value);
+  if (!protocol_parsed || protocol_value != 1) {
+    report_error("receive_response", protocol_parsed ? (int32_t)protocol_value : -1,
+        "PROTOCOL_VERSION_MISMATCH", "parsing CPAP response");
+    return APP_MESSAGE_RESPONSE_IGNORE;
+  }
 
   Tuple *status = dict_find(iterator, MESSAGE_KEY_STATUS);
-  if (status && status->value->uint8 == STATUS_SYNCING) {
+  uint32_t status_value;
+  bool status_parsed = app_message_tuple_uint(status, &status_value);
+  bool status_valid = status_parsed && status_value <= STATUS_RESMED_NETWORK;
+  if (status_valid && status_value == STATUS_SYNCING) {
     s_loading = true;
     s_status = STATUS_OK;
     if (!s_automatic_check) render();
@@ -628,13 +668,23 @@ static AppMessageResponseAction receive_response(
 
   s_loading = false;
 
-  s_status = status ? status->value->uint8 : STATUS_SERVICE_ERROR;
+  if (!status_valid) {
+    report_error("receive_response", status_parsed ? (int32_t)status_value : -1,
+        status ? "STATUS_INVALID" : "STATUS_MISSING",
+        "parsing CPAP response");
+  }
+  s_status = status_valid ? (uint8_t)status_value : STATUS_SERVICE_ERROR;
 
   Tuple *error = dict_find(iterator, MESSAGE_KEY_ERROR_TEXT);
-  if (error && error->type == TUPLE_CSTRING) {
-    snprintf(s_error_text, sizeof(s_error_text), "%s", error->value->cstring);
+  const char *error_text;
+  if (app_message_tuple_cstring(error, &error_text)) {
+    snprintf(s_error_text, sizeof(s_error_text), "%s", error_text);
   } else {
     s_error_text[0] = '\0';
+    if (error) {
+      report_error("receive_response", error->length, "ERROR_TEXT_INVALID",
+          "parsing CPAP response");
+    }
   }
 
   bool received_records = s_status == STATUS_OK || s_status == STATUS_PARTIAL;
@@ -676,25 +726,46 @@ static AppMessageResponseAction receive_response(
     ScoreCache next = {0};
     next.version = CACHE_VERSION;
     next.count = DAYS;
-    next.fetched_at = tuple_uint32(iterator, MESSAGE_KEY_FETCHED_AT, 0);
+    bool fields_valid = true;
+    next.fetched_at = tuple_uint32(
+        iterator, MESSAGE_KEY_FETCHED_AT, 0, &fields_valid);
     for (int i = 0; i < DAYS; i++) {
-      next.dates[i] = tuple_uint32(iterator, date_keys[i], 0);
-      uint32_t raw_score = tuple_uint32(iterator, score_keys[i], SCORE_UNAVAILABLE);
+      next.dates[i] = tuple_uint32(
+          iterator, date_keys[i], 0, &fields_valid);
+      uint32_t raw_score = tuple_uint32(
+          iterator, score_keys[i], SCORE_UNAVAILABLE, &fields_valid);
       next.scores[i] = raw_score <= 100 ? raw_score : SCORE_UNAVAILABLE;
-      uint32_t raw_usage = tuple_uint32(iterator, usage_keys[i], METRIC_UNAVAILABLE);
-      uint32_t raw_ahi = tuple_uint32(iterator, ahi_keys[i], METRIC_UNAVAILABLE);
-      uint32_t raw_mask = tuple_uint32(iterator, mask_keys[i], COUNT_UNAVAILABLE);
-      uint32_t raw_leak = tuple_uint32(iterator, leak_keys[i], METRIC_UNAVAILABLE);
+      uint32_t raw_usage = tuple_uint32(
+          iterator, usage_keys[i], METRIC_UNAVAILABLE, &fields_valid);
+      uint32_t raw_ahi = tuple_uint32(
+          iterator, ahi_keys[i], METRIC_UNAVAILABLE, &fields_valid);
+      uint32_t raw_mask = tuple_uint32(
+          iterator, mask_keys[i], COUNT_UNAVAILABLE, &fields_valid);
+      uint32_t raw_leak = tuple_uint32(
+          iterator, leak_keys[i], METRIC_UNAVAILABLE, &fields_valid);
       next.usage_minutes[i] = raw_usage < METRIC_UNAVAILABLE ? raw_usage : METRIC_UNAVAILABLE;
       next.ahi_x10[i] = raw_ahi < METRIC_UNAVAILABLE ? raw_ahi : METRIC_UNAVAILABLE;
       next.mask_off[i] = raw_mask < COUNT_UNAVAILABLE ? raw_mask : COUNT_UNAVAILABLE;
       next.leak_x10[i] = raw_leak < METRIC_UNAVAILABLE ? raw_leak : METRIC_UNAVAILABLE;
     }
 
-    s_cache = next;
-    s_has_cache = true;
-    persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
-    has_new_record = latest_available_date(&s_cache) > previous_latest_date;
+    if (!fields_valid) {
+      report_error("receive_response", s_status, "SNAPSHOT_FIELD_INVALID",
+          "parsing CPAP response");
+      s_status = STATUS_SERVICE_ERROR;
+      result_status = s_status;
+      received_records = false;
+    }
+
+    if (received_records) {
+      s_cache = next;
+      s_has_cache = true;
+      int written = persist_write_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache));
+      if (written != (int)sizeof(s_cache)) {
+        report_error("persist_write_data", written, "PERSIST_WRITE_FAILED", "saving CPAP response");
+      }
+      has_new_record = latest_available_date(&s_cache) > previous_latest_date;
+    }
   }
 
   if (s_automatic_check) {
@@ -747,6 +818,7 @@ static void click_config_provider(void *context) {
 static TextLayer *create_text_layer(Layer *parent, GRect frame, const char *font_key,
                                     GTextAlignment alignment, GColor color) {
   TextLayer *layer = text_layer_create(frame);
+  ERROR_REPORT_NULL(s_errors, layer, "text_layer_create", "creating CPAP screen");
   text_layer_set_background_color(layer, GColorClear);
   text_layer_set_text_color(layer, color);
   text_layer_set_font(layer, fonts_get_system_font(font_key));
@@ -765,12 +837,13 @@ static void window_load(Window *window) {
 
   s_date_layer = create_text_layer(root, GRect(64, 0, bounds.size.w - 72, 28),
                                    FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight, GColorBlack);
-
   s_graph_layer = layer_create(GRect(0, 26, bounds.size.w, bounds.size.h - 26));
+  ERROR_REPORT_NULL(s_errors, s_graph_layer, "layer_create", "creating CPAP screen");
   layer_set_update_proc(s_graph_layer, graph_update_proc);
   layer_add_child(root, s_graph_layer);
 
   s_ring_layer = layer_create(GRect(bounds.size.w / 2 - 48, 20, 96, 96));
+  ERROR_REPORT_NULL(s_errors, s_ring_layer, "layer_create", "creating CPAP screen");
   layer_set_update_proc(s_ring_layer, ring_update_proc);
   layer_add_child(root, s_ring_layer);
 
@@ -779,7 +852,6 @@ static void window_load(Window *window) {
   text_layer_set_text(s_score_label_layer, "SCORE");
   s_score_layer = create_text_layer(root, GRect(40, 48, 120, 54),
                                     FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter, GColorBlack);
-
   static const char *metric_labels[METRIC_ROWS] = {"Usage", "Events", "Mask Off", "Leak"};
   for (int i = 0; i < METRIC_ROWS; i++) {
     int y = 111 + i * 23;
@@ -791,14 +863,12 @@ static void window_load(Window *window) {
   }
   s_updated_layer = create_text_layer(root, GRect(8, 210, bounds.size.w - 16, 18),
                                       FONT_KEY_GOTHIC_14, GTextAlignmentCenter, GColorBlack);
-
   s_state_title_layer = create_text_layer(root, GRect(8, 68, bounds.size.w - 16, 36),
                                           FONT_KEY_GOTHIC_28_BOLD, GTextAlignmentCenter, GColorBlack);
   s_state_body_layer = create_text_layer(root, GRect(14, 108, bounds.size.w - 28, 58),
                                          FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
   s_state_footer_layer = create_text_layer(root, GRect(8, 184, bounds.size.w - 16, 28),
                                            FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter, GColorBlack);
-
   render();
 }
 
@@ -833,6 +903,13 @@ static void wakeup_handler(WakeupId wakeup_id, int32_t cookie) {
 }
 
 static void init(void) {
+  s_errors = error_reporter_create(&(ErrorReporterConfig){
+    .persist_key = PERSIST_ERRORS_KEY,
+    .storage_bytes = 2048,
+  });
+  if (!s_errors) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "pebble-errors source=cpap/watch reporter=create_failed");
+  }
   memset(&s_cache, 0, sizeof(s_cache));
   for (int i = 0; i < DAYS; i++) {
     s_cache.scores[i] = SCORE_UNAVAILABLE;
@@ -848,11 +925,15 @@ static void init(void) {
 
   wakeup_service_subscribe(wakeup_handler);
 
-  if (persist_exists(PERSIST_KEY_CACHE) &&
-      persist_get_size(PERSIST_KEY_CACHE) == (int)sizeof(s_cache) &&
-      persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) == (int)sizeof(s_cache) &&
-      s_cache.version == CACHE_VERSION) {
-    s_has_cache = true;
+  if (persist_exists(PERSIST_KEY_CACHE)) {
+    int size = persist_get_size(PERSIST_KEY_CACHE);
+    int result = size == (int)sizeof(s_cache)
+        ? persist_read_data(PERSIST_KEY_CACHE, &s_cache, sizeof(s_cache)) : size;
+    if (result == (int)sizeof(s_cache) && s_cache.version == CACHE_VERSION) {
+      s_has_cache = true;
+    } else {
+      report_error("persist_read_data", result, "CACHE_RECORD_INVALID", "loading CPAP cache");
+    }
   }
   schedule_next_wakeup(!automatic_launch && cache_has_yesterday());
   bool refresh_on_launch = automatic_launch || !cache_has_yesterday();
@@ -861,7 +942,7 @@ static void init(void) {
   AppMessageClientConfig phone_config = {
     .app_name = "cpap",
     .inbox_size = 1024,
-    .outbox_size = 64,
+    .outbox_size = PEBBLE_ERROR_OUTBOX_BYTES,
     .protocol = {
       .protocol_key = MESSAGE_KEY_PROTOCOL,
       .command_key = MESSAGE_KEY_COMMAND,
@@ -872,9 +953,11 @@ static void init(void) {
     },
     .response_received = receive_response,
     .request_failed = phone_request_failed,
+    .errors = s_errors,
   };
 
   s_window = window_create();
+  ERROR_REPORT_NULL(s_errors, s_window, "window_create", "creating CPAP screen");
   window_set_background_color(s_window, GColorWhite);
   window_set_window_handlers(s_window, (WindowHandlers) {
     .load = window_load,
@@ -887,6 +970,8 @@ static void init(void) {
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   if (automatic_launch) {
     s_probe_window = window_create();
+    ERROR_REPORT_NULL(s_errors, s_probe_window, "window_create",
+        "running automatic CPAP check");
     window_set_background_color(s_probe_window, GColorClear);
     window_stack_push(s_probe_window, false);
   } else {
@@ -910,6 +995,7 @@ static void deinit(void) {
   tick_timer_service_unsubscribe();
   if (s_probe_window) window_destroy(s_probe_window);
   window_destroy(s_window);
+  error_reporter_destroy(s_errors);
 }
 
 int main(void) {

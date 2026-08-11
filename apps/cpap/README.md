@@ -53,5 +53,5 @@ The installable file is `build/cpap.pbw`.
 CPAP is not a medical device. Do not use it for diagnosis or treatment
 decisions.
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for refresh scheduling, diagnostics,
+See [DEVELOPMENT.md](DEVELOPMENT.md) for refresh scheduling, optional error reporting,
 security boundaries, emulator workflows, and visual QA.

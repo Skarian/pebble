@@ -1,7 +1,9 @@
 package com.skarian.pebble.appmessage
 
+import com.skarian.pebble.errors.ErrorReporter
 import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
+import io.rebble.pebblekit2.common.model.ReceiveResult
 import io.rebble.pebblekit2.common.model.TransmissionResult
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -23,21 +25,26 @@ class AppMessageSessionTest {
     @Test
     fun `exception and timeout retry the identical message before success`() = runBlocking {
         val calls = mutableListOf<PebbleDictionary>()
+        val reported = mutableListOf<Pair<Any, String>>()
+        val original = IllegalStateException("private transport detail")
         val session = session(AppMessageTransport { _, _, message ->
             calls += message
             when (calls.size) {
-                1 -> error("private transport detail")
+                1 -> throw original
                 2 -> TransmissionResult.FailedTimeout
                 else -> TransmissionResult.Success
             }
-        })
-        session.messageReceived(WATCH, "refresh", "7")
+        }, reporter = ErrorReporter { error, whileDoing -> reported += error to whileDoing })
+        session.open(WATCH)
 
         val delivery = session.send(WATCH, "refresh", "7", message(1))
 
         assertTrue(delivery.delivered)
         assertEquals(3, delivery.attempts)
         calls.drop(1).forEach { assertSame(calls.first(), it) }
+        assertSame(original, reported[0].first)
+        assertSame(TransmissionResult.FailedTimeout, reported[1].first)
+        assertTrue(reported.all { it.second == "sending a Pebble AppMessage for refresh" })
     }
 
     @Test
@@ -54,7 +61,7 @@ class AppMessageSessionTest {
                 TransmissionResult.Success
             }
         })
-        session.messageReceived(WATCH, "history", "8")
+        session.open(WATCH)
 
         val delivery = session.sendBatch(
             WATCH, "history", "8", listOf(message(1), message(2), message(3)),
@@ -68,23 +75,19 @@ class AppMessageSessionTest {
     @Test
     fun `permanent failure is typed and never retried`() = runBlocking {
         var calls = 0
-        var encoded = ""
-        val log = AppMessageLog("test", object : LogStorage {
-            override fun read() = encoded
-            override fun write(value: String) { encoded = value }
-        })
+        val reported = mutableListOf<Any>()
         val session = session(AppMessageTransport { _, _, _ ->
             calls += 1
             TransmissionResult.FailedNoPermissions
-        }, log = log)
-        session.messageReceived(WATCH, "refresh", "8")
+        }, reporter = ErrorReporter { error, _ -> reported += error })
+        session.open(WATCH)
 
         val delivery = session.send(WATCH, "refresh", "8", message(1))
 
         assertFalse(delivery.delivered)
         assertEquals(AppMessageSession.Failure.NO_PERMISSIONS, delivery.failure)
         assertEquals(1, calls)
-        assertTrue(log.export().contains("\"result\":\"no_permissions\""))
+        assertEquals(listOf(TransmissionResult.FailedNoPermissions), reported)
     }
 
     @Test
@@ -97,7 +100,7 @@ class AppMessageSessionTest {
             active.decrementAndGet()
             TransmissionResult.Success
         })
-        session.messageReceived(WATCH, "read", "9")
+        session.open(WATCH)
 
         coroutineScope {
             val first = async { session.sendBatch(WATCH, "read", "9", listOf(message(1), message(2))) }
@@ -131,7 +134,7 @@ class AppMessageSessionTest {
                 }
             },
         )
-        session.messageReceived(WATCH, "read", "hung")
+        session.open(WATCH)
 
         coroutineScope {
             val hung = async { session.send(WATCH, "read", "hung", message(1)) }
@@ -159,13 +162,195 @@ class AppMessageSessionTest {
         val opened = session.announceReady(WATCH, message(19))
         session.close(WATCH)
         val closed = session.send(WATCH, "refresh", "11", message(1))
-        session.messageReceived(WATCH, "refresh", "11")
+        session.open(WATCH)
         val recovered = session.send(WATCH, "refresh", "11", message(1))
 
         assertTrue(opened.delivered)
         assertEquals(4, opened.attempts)
         assertEquals(AppMessageSession.Failure.SESSION_INACTIVE, closed.failure)
         assertTrue(recovered.delivered)
+    }
+
+    @Test
+    fun `READY advertises reporter opt in on every announcement`() = runBlocking {
+        val messages = mutableListOf<PebbleDictionary>()
+        var optedIn = false
+        val reporter = object : ErrorReporter {
+            override val enabled get() = optedIn
+            override fun report(originalError: Any, whileDoing: String) = Unit
+        }
+        val session = session(
+            AppMessageTransport { _, _, data ->
+                messages += data
+                TransmissionResult.Success
+            },
+            reporter = reporter,
+        )
+
+        session.open(WATCH)
+        assertTrue(session.announceReady(WATCH, message(19)).delivered)
+
+        assertEquals(2, messages.size)
+        messages.forEach {
+            assertEquals(
+                0u.toUByte(),
+                (it[AppMessageErrorKeys.ERROR_ENABLED] as PebbleDictionaryItem.UInt8).value,
+            )
+        }
+        messages.clear()
+        optedIn = true
+        session.repeatReadyForOpenWatches(message(19))
+        assertEquals(2, messages.size)
+        messages.forEach {
+            assertEquals(1u.toUByte(),
+                (it[AppMessageErrorKeys.ERROR_ENABLED] as PebbleDictionaryItem.UInt8).value)
+        }
+        session.close(WATCH)
+        session.repeatReadyForOpenWatches(message(19))
+        assertEquals(2, messages.size)
+    }
+
+    @Test
+    fun `watch error is durably imported before matching ACK is sent`() = runBlocking {
+        val imported = mutableListOf<List<Any>>()
+        val sent = mutableListOf<PebbleDictionary>()
+        val reporter = object : ErrorReporter {
+            override val enabled = true
+            override fun report(originalError: Any, whileDoing: String) = Unit
+            override suspend fun importWatch(
+                source: String,
+                generation: Long,
+                sequence: Long,
+                atEpochSeconds: Long,
+                payload: String,
+                dropped: Long,
+            ): Boolean {
+                imported += listOf(source, generation, sequence, atEpochSeconds, payload, dropped)
+                return true
+            }
+        }
+        val session = session(
+            transport = AppMessageTransport { _, _, data ->
+                sent += data
+                TransmissionResult.Success
+            },
+            reporter = reporter,
+            watchSource = "agents/watch@test",
+        )
+        session.open(WATCH)
+        val payload = WATCH_ERROR
+        val result = session.receiveWatchError(WATCH, watchError(payload = payload))
+
+        assertEquals(ReceiveResult.Ack, result)
+        assertEquals(listOf("agents/watch@test", 5L, 8L, 123L, payload, 2L), imported.single())
+        assertEquals(1, sent.size)
+        assertEquals(
+            AppMessageErrorKeys.ACK,
+            (sent.single()[AppMessageErrorKeys.ERROR_COMMAND] as PebbleDictionaryItem.UInt8).value,
+        )
+        assertEquals(
+            8u,
+            (sent.single()[AppMessageErrorKeys.ERROR_SEQUENCE] as PebbleDictionaryItem.UInt32).value,
+        )
+    }
+
+    @Test
+    fun `watch relay rejects nonpositive identity and timestamp before import`() = runBlocking {
+        var imports = 0
+        val reported = mutableListOf<Any>()
+        val reporter = object : ErrorReporter {
+            override fun report(originalError: Any, whileDoing: String) { reported += originalError }
+            override suspend fun importWatch(source: String, generation: Long, sequence: Long,
+                atEpochSeconds: Long, payload: String, dropped: Long): Boolean { imports += 1; return true }
+        }
+        val session = session(reporter = reporter)
+        session.open(WATCH)
+
+        assertEquals(ReceiveResult.Nack, session.receiveWatchError(WATCH, watchError(generation = 0u)))
+        assertEquals(ReceiveResult.Nack, session.receiveWatchError(WATCH, watchError(sequence = 0u)))
+        assertEquals(ReceiveResult.Nack, session.receiveWatchError(WATCH, watchError(at = 0u)))
+
+        assertEquals(0, imports)
+        assertEquals(3, reported.size)
+        assertTrue(reported.all { it is WatchErrorEnvelopeException })
+    }
+
+    @Test
+    fun `watch error ACK is omitted instead of waiting behind business delivery`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val sent = mutableListOf<PebbleDictionary>()
+        val reporter = object : ErrorReporter {
+            override fun report(originalError: Any, whileDoing: String) = Unit
+            override suspend fun importWatch(source: String, generation: Long, sequence: Long,
+                atEpochSeconds: Long, payload: String, dropped: Long) = true
+        }
+        val session = session(AppMessageTransport { _, _, data ->
+            sent += data
+            if (data.containsKey(1u)) { started.complete(Unit); release.await() }
+            TransmissionResult.Success
+        }, reporter = reporter)
+        session.open(WATCH)
+        val business = async { session.send(WATCH, "refresh", "1", message(1)) }
+        started.await()
+
+        assertEquals(ReceiveResult.Ack, session.receiveWatchError(WATCH, watchError()))
+        assertEquals(1, sent.size)
+
+        release.complete(Unit)
+        assertTrue(business.await().delivered)
+    }
+
+    @Test
+    fun `watch error ACK is one shot and never reports its own delivery failure`() = runBlocking {
+        var sends = 0
+        val reported = mutableListOf<Any>()
+        val reporter = object : ErrorReporter {
+            override fun report(originalError: Any, whileDoing: String) { reported += originalError }
+            override suspend fun importWatch(source: String, generation: Long, sequence: Long,
+                atEpochSeconds: Long, payload: String, dropped: Long) = true
+        }
+        val session = session(
+            transport = AppMessageTransport { _, _, _ ->
+                sends += 1
+                TransmissionResult.FailedWatchNotConnected
+            },
+            reporter = reporter,
+        )
+        session.open(WATCH)
+
+        assertEquals(ReceiveResult.Ack, session.receiveWatchError(WATCH, watchError()))
+        assertEquals(1, sends)
+        assertTrue(reported.isEmpty())
+    }
+
+    @Test
+    fun `diagnostic ACK timeout is short and releases the business outbox`() = runBlocking {
+        val timeouts = mutableListOf<Long>()
+        val sent = mutableListOf<Int>()
+        val reporter = object : ErrorReporter {
+            override fun report(originalError: Any, whileDoing: String) = Unit
+            override suspend fun importWatch(source: String, generation: Long, sequence: Long,
+                atEpochSeconds: Long, payload: String, dropped: Long) = true
+        }
+        val session = session(
+            transport = AppMessageTransport { _, _, data ->
+                (data[1u] as? PebbleDictionaryItem.UInt8)?.value?.toInt()?.let(sent::add)
+                TransmissionResult.Success
+            },
+            reporter = reporter,
+            runTransportAttempt = { timeout, send ->
+                timeouts += timeout
+                if (timeout == 500L) null else send()
+            },
+        )
+        session.open(WATCH)
+
+        assertEquals(ReceiveResult.Ack, session.receiveWatchError(WATCH, watchError()))
+        assertTrue(session.send(WATCH, "refresh", "1", message(7)).delivered)
+
+        assertEquals(listOf(500L, 1L), timeouts)
+        assertEquals(listOf(7), sent)
     }
 
     @Test
@@ -191,7 +376,7 @@ class AppMessageSessionTest {
         var replays = 0
         var starts = 0
         val session = session(now = { now }, readLeaseMillis = 100)
-        session.messageReceived(WATCH, "snapshot", "12")
+        session.open(WATCH)
 
         val started = session.beginRead(WATCH, "snapshot", "12", "scale:hour")
         assertEquals(AppMessageSession.ReadStatus.STARTED, started.status)
@@ -233,8 +418,8 @@ class AppMessageSessionTest {
     fun `read completion and abandonment are scoped to one watch`() = runBlocking {
         var firstReplays = 0
         val session = session()
-        session.messageReceived(WATCH, "snapshot", "21")
-        session.messageReceived(OTHER_WATCH, "snapshot", "21")
+        session.open(WATCH)
+        session.open(OTHER_WATCH)
         session.beginRead(WATCH, "snapshot", "21")
         session.beginRead(OTHER_WATCH, "snapshot", "21")
 
@@ -260,7 +445,7 @@ class AppMessageSessionTest {
     fun `closing a session cancels its active read`() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val session = session()
-        session.messageReceived(WATCH, "snapshot", "14")
+        session.open(WATCH)
         val admission = session.beginRead(WATCH, "snapshot", "14")
         val job = requireNotNull(admission.launch(this) { gate.await() })
 
@@ -268,54 +453,11 @@ class AppMessageSessionTest {
         job.join()
 
         assertTrue(job.isCancelled)
-        session.messageReceived(WATCH, "snapshot", "14")
+        session.open(WATCH)
         assertEquals(
             AppMessageSession.ReadStatus.STARTED,
             session.beginRead(WATCH, "snapshot", "14").status,
         )
-    }
-
-    @Test
-    fun `log keeps only bounded redacted incidents while routine events remain live`() {
-        var encoded = listOf(
-            "100\tready\tsession\tdelivery_success\tactive\t1\t1\t0\tsuccess\t\tok",
-            "101\tsend\t17\tdelivery_failure\tactive\t1\t1\t0\tunknown\t\tdelivery",
-        ).joinToString("\n")
-        val live = mutableListOf<String>()
-        val log = AppMessageLog(
-            app = "agents",
-            storage = object : LogStorage {
-                override fun read() = encoded
-                override fun write(value: String) { encoded = value }
-            },
-            limit = 2,
-            now = { 123L },
-            output = live::add,
-        )
-
-        log.record(LogEntry(operation = "send", requestId = "dictation secret@example.com", event = "request"))
-        log.record(LogEntry(
-            operation = "send", requestId = "dictation secret@example.com",
-            event = "delivery_retry", result = "unknown", detail = "bad value with token",
-            category = "pending",
-        ))
-        log.record(LogEntry(
-            operation = "refresh", requestId = "18", event = "domain_failure",
-            category = "service",
-        ))
-
-        val report = log.export()
-        assertFalse(report.contains("secret@example.com"))
-        assertFalse(report.contains("dictation secret"))
-        assertFalse(report.contains("bad value with token"))
-        assertTrue(report.contains("hash:"))
-        assertFalse(report.contains("delivery_success"))
-        assertFalse(report.contains("\"event\":\"request\""))
-        assertTrue(report.contains("delivery_retry"))
-        assertTrue(report.contains("domain_failure"))
-        assertEquals(2, report.split("\"at\":").size - 1)
-        assertTrue(live.any { it.contains("event=request ") })
-        assertFalse(encoded.contains("delivery_success"))
     }
 
     private fun session(
@@ -327,18 +469,18 @@ class AppMessageSessionTest {
         ) -> TransmissionResult? = { _, send -> send() },
         now: () -> Long = System::currentTimeMillis,
         readLeaseMillis: Long = 90_000,
-        log: AppMessageLog = AppMessageLog("test", object : LogStorage {
-            override fun read() = ""
-            override fun write(value: String) = Unit
-        }),
+        reporter: ErrorReporter = ErrorReporter.Disabled,
+        watchSource: String = "test/watch@test",
     ) = AppMessageSession(
         appUuid = UUID.fromString("e4491051-309d-4d5c-9f5a-5f1ab531051d"),
         transport = transport,
-        log = log,
+        errorReporter = reporter,
+        watchErrorSource = watchSource,
         state = AppMessageSession.SessionState(),
         maxAttempts = maxAttempts,
         retryDelaysMillis = listOf(0L, 0L),
         transportTimeoutMillis = 1L,
+        diagnosticAckTimeoutMillis = 500L,
         runTransportAttempt = runTransportAttempt,
         wait = {},
         now = now,
@@ -350,8 +492,19 @@ class AppMessageSessionTest {
         1u to PebbleDictionaryItem.UInt8(value.toUByte()),
     )
 
+    private fun watchError(generation: UInt = 5u, sequence: UInt = 8u, at: UInt = 123u,
+                           payload: String = WATCH_ERROR): PebbleDictionary = mapOf(
+        AppMessageErrorKeys.ERROR_COMMAND to PebbleDictionaryItem.UInt8(AppMessageErrorKeys.IMPORT),
+        AppMessageErrorKeys.ERROR_GENERATION to PebbleDictionaryItem.UInt32(generation),
+        AppMessageErrorKeys.ERROR_SEQUENCE to PebbleDictionaryItem.UInt32(sequence),
+        AppMessageErrorKeys.ERROR_AT to PebbleDictionaryItem.UInt32(at),
+        AppMessageErrorKeys.ERROR_DATA to PebbleDictionaryItem.Text(payload),
+        AppMessageErrorKeys.ERROR_DROPPED to PebbleDictionaryItem.UInt32(2u),
+    )
+
     private companion object {
         const val WATCH = "watch"
         const val OTHER_WATCH = "other-watch"
+        const val WATCH_ERROR = "v1\tAppMessageResult\tapp_message_outbox_send\t7\tAPP_MSG_BUSY\tbusy\tmain.c\t90\tsending"
     }
 }

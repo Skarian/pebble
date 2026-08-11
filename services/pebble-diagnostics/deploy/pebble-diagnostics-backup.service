@@ -1,0 +1,31 @@
+[Unit]
+Description=Back up the Pebble Diagnostics journal
+After=pebble-diagnostics.service
+
+[Service]
+Type=oneshot
+User=pebble-diagnostics
+Group=pebble-diagnostics
+WorkingDirectory=/opt/pebble-diagnostics/current
+Environment=PEBBLE_DIAGNOSTICS_DB=/var/lib/pebble-diagnostics/errors.sqlite3
+Environment=PEBBLE_DIAGNOSTICS_MAX_BYTES=536870912
+Environment=PEBBLE_DIAGNOSTICS_BACKUP_TMP=/run/pebble-diagnostics-backup
+ExecStart=/usr/bin/node /opt/pebble-diagnostics/current/admin.mjs backup --output-dir /var/backups/pebble-diagnostics --age-recipient-file /etc/pebble-diagnostics/age-recipient.txt
+StateDirectory=pebble-diagnostics
+StateDirectoryMode=0700
+RuntimeDirectory=pebble-diagnostics-backup
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+InaccessiblePaths=-/run/docker.sock
+ReadWritePaths=/var/backups/pebble-diagnostics
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX

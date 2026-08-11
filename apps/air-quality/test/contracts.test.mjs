@@ -33,7 +33,7 @@ test('watch keeps a new versioned last-good cache and rejects stale responses', 
   assert.match(watch, /PERSIST_KEY_CACHE 4102/);
   assert.match(watch, /FLAG_STALE 0x01/);
   assert.match(watch, /FLAG_CACHED 0x02/);
-  assert.match(watch, /observed->value->uint32 < s_cache\.observed_at/);
+  assert.match(watch, /observed_at < s_cache\.observed_at/);
   assert.match(watch, /persist_write_data\(PERSIST_KEY_CACHE/);
 });
 

@@ -11,7 +11,9 @@
         android:usesPermissionFlags="neverForLocation"
         tools:ignore="UnusedAttribute" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
+        android:name=".AirQualityApplication"
         android:allowBackup="true"
         android:icon="@drawable/ic_airquality"
         android:label="@string/app_name"

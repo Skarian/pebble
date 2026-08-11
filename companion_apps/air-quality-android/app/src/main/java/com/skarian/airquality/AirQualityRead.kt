@@ -24,6 +24,7 @@ internal class AirQualityRequestPipeline(
     private val deliver: suspend (AirQualityRequest, AirQualityResponse) -> Unit,
     private val deliverReplay: suspend (AirQualityRequest, List<AirQualityResponse>) -> Unit,
     private val scheduleHistoryRepair: (AirQualityRequest) -> Unit,
+    private val reportError: (Throwable) -> Unit = {},
 ) {
     suspend fun execute(request: AirQualityRequest): List<AirQualityResponse> {
         val cached = cachedResponse(request)
@@ -37,7 +38,8 @@ internal class AirQualityRequestPipeline(
                 liveResponse(request)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
+                reportError(error)
                 liveFailureResponse(request)
             }
             deliver(request, live)

@@ -10,64 +10,73 @@ import androidx.work.WorkerParameters
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 class AirQualityDailySync(context: Context, parameters: WorkerParameters) :
     CoroutineWorker(context, parameters) {
 
     override suspend fun doWork(): Result {
-        val settings = CompanionSettings(applicationContext)
-        val address = settings.sensorAddress ?: run {
-            Log.i(LOG_TAG, "Daily sync skipped: no sensor selected")
-            return Result.success()
-        }
-        settings.lastDailySyncAttemptAt = Instant.now().epochSecond
-        Log.i(LOG_TAG, "Daily sync started")
-        val scanner = AranetScanner(applicationContext)
-        if (!scanner.hasPermissions()) {
-            Log.w(LOG_TAG, "Daily sync skipped: Nearby devices permission unavailable")
-            return Result.success()
-        }
-        if (!scanner.bluetoothEnabled()) {
-            Log.w(LOG_TAG, "Daily sync skipped: Bluetooth unavailable")
-            return Result.success()
-        }
-
-        val reading = suspendCancellableCoroutine<AranetReading?> { continuation ->
-            scanner.readOnce(address) { value ->
-                if (continuation.isActive) continuation.resume(value)
+        val errors = airErrorReporter(applicationContext)
+        return try {
+            val settings = CompanionSettings(applicationContext)
+            val address = settings.sensorAddress ?: run {
+                Log.i(LOG_TAG, "Daily sync skipped: no sensor selected")
+                return Result.success()
             }
-        } ?: run {
-            Log.w(LOG_TAG, "Daily sync did not find the selected sensor")
-            return Result.success()
-        }
-
-        ReadingStore(applicationContext).use { it.save(reading) }
-        settings.lastDailySyncSuccessAt = Instant.now().epochSecond
-        Log.i(LOG_TAG, "Daily sync saved a fresh reading")
-        val now = Instant.now().epochSecond
-        val lookbackSeconds = ReadingStore(applicationContext).use {
-            it.requiredHistoryLookbackSeconds(address, now, ChartScale.WEEK.windowSeconds)
-        } ?: return Result.success()
-
-        val history = suspendCancellableCoroutine<kotlin.Result<List<AranetReading>>> { continuation ->
-            AranetHistoryReader(applicationContext).import(
-                address = address,
-                deviceName = reading.deviceName,
-                batteryPercent = reading.batteryPercent,
-                co2State = reading.co2State,
-                lookbackSeconds = lookbackSeconds,
-            ) { result ->
-                if (continuation.isActive) continuation.resume(result)
+            settings.lastDailySyncAttemptAt = Instant.now().epochSecond
+            Log.i(LOG_TAG, "Daily sync started")
+            val scanner = AranetScanner(applicationContext, errors)
+            if (!scanner.hasPermissions()) {
+                Log.w(LOG_TAG, "Daily sync skipped: Nearby devices permission unavailable")
+                return Result.success()
             }
+            if (!scanner.bluetoothEnabled()) {
+                Log.w(LOG_TAG, "Daily sync skipped: Bluetooth unavailable")
+                return Result.success()
+            }
+
+            val reading = suspendCancellableCoroutine<AranetReading?> { continuation ->
+                scanner.readOnce(address) { value ->
+                    if (continuation.isActive) continuation.resume(value)
+                }
+            } ?: run {
+                Log.w(LOG_TAG, "Daily sync did not find the selected sensor")
+                return Result.success()
+            }
+
+            ReadingStore(applicationContext).use { it.save(reading) }
+            settings.lastDailySyncSuccessAt = Instant.now().epochSecond
+            Log.i(LOG_TAG, "Daily sync saved a fresh reading")
+            val now = Instant.now().epochSecond
+            val lookbackSeconds = ReadingStore(applicationContext).use {
+                it.requiredHistoryLookbackSeconds(address, now, ChartScale.WEEK.windowSeconds)
+            } ?: return Result.success()
+
+            val history = suspendCancellableCoroutine<kotlin.Result<List<AranetReading>>> { continuation ->
+                AranetHistoryReader(applicationContext, errors).import(
+                    address = address,
+                    deviceName = reading.deviceName,
+                    batteryPercent = reading.batteryPercent,
+                    co2State = reading.co2State,
+                    lookbackSeconds = lookbackSeconds,
+                ) { result ->
+                    if (continuation.isActive) continuation.resume(result)
+                }
+            }
+            history.onSuccess { readings ->
+                ReadingStore(applicationContext).use { it.saveAll(readings) }
+                Log.i(LOG_TAG, "Daily sync repaired missing history")
+            }.onFailure {
+                Log.w(LOG_TAG, "Daily sync history repair failed")
+            }
+            Result.success()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            errors.report(error, "running the daily air-quality sync")
+            Result.failure()
         }
-        history.onSuccess { readings ->
-            ReadingStore(applicationContext).use { it.saveAll(readings) }
-            Log.i(LOG_TAG, "Daily sync repaired missing history")
-        }.onFailure {
-            Log.w(LOG_TAG, "Daily sync history repair failed")
-        }
-        return Result.success()
     }
 
     companion object {
@@ -75,15 +84,20 @@ class AirQualityDailySync(context: Context, parameters: WorkerParameters) :
         private const val UNIQUE_WORK = "airquality-daily-sync"
 
         fun schedule(context: Context) {
-            if (CompanionSettings(context).sensorAddress.isNullOrBlank()) return
-            val request = PeriodicWorkRequestBuilder<AirQualityDailySync>(24, TimeUnit.HOURS)
-                .setInitialDelay(24, TimeUnit.HOURS)
-                .build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                UNIQUE_WORK,
-                ExistingPeriodicWorkPolicy.KEEP,
-                request,
-            )
+            val errors = airErrorReporter(context)
+            try {
+                if (CompanionSettings(context).sensorAddress.isNullOrBlank()) return
+                val request = PeriodicWorkRequestBuilder<AirQualityDailySync>(24, TimeUnit.HOURS)
+                    .setInitialDelay(24, TimeUnit.HOURS)
+                    .build()
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    UNIQUE_WORK,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    request,
+                )
+            } catch (error: Throwable) {
+                errors.report(error, "scheduling the daily air-quality sync")
+            }
         }
     }
 }

@@ -112,10 +112,19 @@
             style="@style/StatusCard"
             android:minHeight="80dp" />
 
+        <TextView
+            style="@style/SectionTitle"
+            android:text="Error reporting" />
+
+        <TextView
+            android:id="@+id/errorReportingStatus"
+            style="@style/StatusCard"
+            android:text="Disabled · 0 queued" />
+
         <Button
-            android:id="@+id/copyDiagnosticsButton"
+            android:id="@+id/errorReportingButton"
             style="@style/ActionButton"
-            android:text="Copy connection diagnostics" />
+            android:text="Configure error reporting" />
 
         <TextView
             android:layout_width="match_parent"

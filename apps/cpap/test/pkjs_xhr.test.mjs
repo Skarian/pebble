@@ -16,21 +16,25 @@ function fakeXhr(scenario) {
   function Fake() {
     this.headers = {};
     this.status = null;
+    this.statusText = '';
+    this.responseHeaders = '';
     Fake.instance = this;
   }
   Fake.prototype.open = function () {};
   Fake.prototype.setRequestHeader = function (name, value) {
     this.headers[name] = value;
   };
+  Fake.prototype.getAllResponseHeaders = function () { return this.responseHeaders; };
   Fake.prototype.send = function () {
     scenario(this);
   };
   return Fake;
 }
 
-function invoke(scenario, callback, extraHeaders) {
+function invoke(scenario, callback, extraHeaders, reportError) {
   const Fake = fakeXhr(scenario);
-  createXhrJson(Fake)('GET', 'http://127.0.0.1/test', '', null, callback, extraHeaders);
+  createXhrJson(Fake, {reportError})(
+    'GET', 'http://127.0.0.1/test', '', null, callback, extraHeaders);
   return Fake.instance;
 }
 
@@ -70,19 +74,41 @@ test('timeout and error remain one-shot when loadend follows', () => {
 
 test('invalid and hostile bridge responses use controlled messages', () => {
   const invalid = [];
+  const captured = [];
   invoke((xhr) => {
     xhr.status = 200;
     xhr.responseText = 'not json';
     xhr.onload();
-  }, (...args) => invalid.push(args));
+  }, (...args) => invalid.push(args), null,
+  (error, whileDoing) => captured.push({error, whileDoing}));
   assert.equal(invalid[0][0].message, 'Invalid bridge response');
+  assert.equal(captured[0].error.name, 'SyntaxError');
+  assert.equal(captured[0].error.body, 'not json');
 
   const hostile = [];
   invoke((xhr) => {
     xhr.status = 401;
+    xhr.statusText = 'Unauthorized';
+    xhr.responseHeaders = 'x-request-id: bridge-41';
     xhr.responseText = '{"error":"secret-upstream-details","code":"authentication_failed"}';
     xhr.onload();
-  }, (...args) => hostile.push(args));
+  }, (...args) => hostile.push(args), null,
+  (error, whileDoing) => captured.push({error, whileDoing}));
   assert.equal(hostile[0][0].message, 'ResMed sign-in failed');
   assert.equal(JSON.stringify(hostile).includes('secret-upstream-details'), false);
+  assert.match(captured[1].error.body, /secret-upstream-details/);
+  assert.equal(captured[1].error.statusText, 'Unauthorized');
+  assert.equal(captured[1].error.headers, 'x-request-id: bridge-41');
+});
+
+test('synchronous bridge transport failures are reported and converted once', () => {
+  const calls = [];
+  const captured = [];
+  assert.doesNotThrow(() => invoke(() => { throw new Error('native send failed'); },
+    (...args) => calls.push(args), null, (error) => captured.push(error)));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0].type, 'network');
+  assert.equal(captured[0].name, 'Error');
+  assert.equal(captured[0].message, 'native send failed');
+  assert.equal(captured[0].url, 'http://127.0.0.1/test');
 });

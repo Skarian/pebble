@@ -33,7 +33,7 @@ class RouterRunService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { if (intent?.action == ACTION_START) startRun(intent); return START_NOT_STICKY }
     override fun onCreate() { super.onCreate(); CompanionNotifications.createChannel(this) }
-    override fun onDestroy() { heartbeatHandler.removeCallbacks(heartbeat); runCatching { server?.close() }; executor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { heartbeatHandler.removeCallbacks(heartbeat); runCatching { server?.close() }.onFailure { agentsErrorReporter(this).report(it, "closing the router event socket") }; executor.shutdownNow(); super.onDestroy() }
 
     private fun startRun(intent: Intent) {
         startForeground(CompanionNotifications.ACTIVE_NOTIFICATION_ID, CompanionNotifications.active(this, "Starting agent turn…"))
@@ -50,7 +50,7 @@ class RouterRunService : Service() {
                 heartbeatHandler.postDelayed(heartbeat, HEARTBEAT_MS)
                 TermuxCommandRunner(this).sendStream(requestId,agentId,text,socket.localPort,token)
             }
-        }.onFailure { failRun(requestId,"Could not start live stream: ${it.message}","bridge_start_failed") }
+        }.onFailure { error -> agentsErrorReporter(this).report(error, "starting the router event stream"); failRun(requestId,"Could not start live stream: ${error.message}","bridge_start_failed") }
     }
 
     private fun acceptEvents(socket: ServerSocket, requestId: String, token: String) {
@@ -75,8 +75,10 @@ class RouterRunService : Service() {
                 notifyText(event.text.ifBlank { event.type })
                 if(terminal) { socket.close(); stopSelf() }
             }
-        } catch (_: java.net.SocketException) { }
-        catch (error: Exception) { failRun(requestId,"Live stream failed: ${error.message}","stream_lost", ambiguous=true) }
+        } catch (error: java.net.SocketException) {
+            if (!socket.isClosed) agentsErrorReporter(this).report(error, "reading the router event stream")
+        }
+        catch (error: Exception) { agentsErrorReporter(this).report(error, "reading the router event stream"); failRun(requestId,"Live stream failed: ${error.message}","stream_lost", ambiguous=true) }
     }
 
     private fun deliver(turn: StoredTurn) {
@@ -99,7 +101,8 @@ class RouterRunService : Service() {
                     )
                 }
             }
-        }.onFailure {
+        }.onFailure { error ->
+            agentsErrorReporter(this).report(error, "delivering an agent update")
             CompanionState(this).saveBridgeError("Could not send turn update.")
         }
     }

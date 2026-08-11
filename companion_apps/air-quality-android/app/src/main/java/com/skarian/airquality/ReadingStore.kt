@@ -28,9 +28,7 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
 
     @Synchronized
     fun save(reading: AranetReading) {
-        writableDatabase.insertWithOnConflict(
-            "readings", null, values(reading), SQLiteDatabase.CONFLICT_REPLACE,
-        )
+        insert(writableDatabase, reading)
         writableDatabase.delete(
             "readings",
             "observed_at < ?",
@@ -43,11 +41,7 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
         if (readings.isEmpty()) return
         writableDatabase.beginTransaction()
         try {
-            readings.forEach { reading ->
-                writableDatabase.insertWithOnConflict(
-                    "readings", null, values(reading), SQLiteDatabase.CONFLICT_REPLACE,
-                )
-            }
+            readings.forEach { insert(writableDatabase, it) }
             val newest = readings.maxOf { it.observedAtEpochSeconds }
             writableDatabase.delete(
                 "readings", "observed_at < ?",
@@ -128,4 +122,14 @@ class ReadingStore(context: Context) : SQLiteOpenHelper(context, "airquality-rea
         put("battery", reading.batteryPercent)
         put("co2_state", reading.co2State)
     }
+
+    private fun insert(database: SQLiteDatabase, reading: AranetReading) {
+        requireReadingInserted(database.insertWithOnConflict(
+            "readings", null, values(reading), SQLiteDatabase.CONFLICT_REPLACE,
+        ))
+    }
+}
+
+internal fun requireReadingInserted(rowId: Long) {
+    check(rowId != -1L) { "insertWithOnConflict returned -1 while saving an air-quality reading." }
 }

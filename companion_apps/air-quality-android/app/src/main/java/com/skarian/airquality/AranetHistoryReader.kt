@@ -12,11 +12,15 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import com.skarian.pebble.errors.ErrorReporter
 import java.time.Instant
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
-class AranetHistoryReader(private val context: Context) {
+class AranetHistoryReader(
+    private val context: Context,
+    private val errors: ErrorReporter = ErrorReporter.Disabled,
+) {
     fun import(
         address: String,
         deviceName: String,
@@ -27,7 +31,7 @@ class AranetHistoryReader(private val context: Context) {
     ) {
         Session(
             context, address, deviceName, batteryPercent, co2State,
-            lookbackSeconds, complete,
+            lookbackSeconds, errors, complete,
         ).start()
     }
 
@@ -38,6 +42,7 @@ class AranetHistoryReader(private val context: Context) {
         private val batteryPercent: Int,
         private val co2State: Int,
         private val lookbackSeconds: Long,
+        private val errors: ErrorReporter,
         private val complete: (Result<List<AranetReading>>) -> Unit,
     ) : BluetoothGattCallback() {
         private val handler = Handler(Looper.getMainLooper())
@@ -59,26 +64,37 @@ class AranetHistoryReader(private val context: Context) {
         private val timeout = Runnable { fail("Bluetooth history timed out") }
 
         fun start() {
-            val manager = context.getSystemService(BluetoothManager::class.java)
-            val device = runCatching { manager.adapter.getRemoteDevice(address) }.getOrNull()
-            if (device == null) { fail("Aranet4 is unavailable"); return }
-            armTimeout()
-            gatt = device.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE)
+            try {
+                val manager = requireNotNull(context.getSystemService(BluetoothManager::class.java)) {
+                    "Android did not provide its Bluetooth service."
+                }
+                val device = manager.adapter.getRemoteDevice(address)
+                armTimeout()
+                gatt = requireNotNull(
+                    device.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE),
+                ) { "Android did not create a Bluetooth GATT session." }
+            } catch (error: Throwable) {
+                finish(Result.failure(error))
+            }
         }
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS || newState != BluetoothProfile.STATE_CONNECTED) {
-                fail("Could not connect to Aranet4 history")
-                return
+            guarded {
+                if (status != BluetoothGatt.GATT_SUCCESS || newState != BluetoothProfile.STATE_CONNECTED) {
+                    fail("Could not connect to Aranet4 history", status, newState)
+                    return@guarded
+                }
+                this.gatt = gatt
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                state = State.MTU
+                armTimeout()
+                if (!gatt.requestMtu(247)) discoverServices(gatt)
             }
-            this.gatt = gatt
-            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-            state = State.MTU
-            armTimeout()
-            if (!gatt.requestMtu(247)) discoverServices(gatt)
         }
 
-        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) = discoverServices(gatt)
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) = guarded {
+            discoverServices(gatt)
+        }
 
         private fun discoverServices(gatt: BluetoothGatt) {
             state = State.SERVICES
@@ -87,16 +103,33 @@ class AranetHistoryReader(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) { fail("Could not read Aranet4 services"); return }
-            fun characteristic(value: String): BluetoothGattCharacteristic? = gatt.services.asSequence()
-                .flatMap { it.characteristics.asSequence() }
-                .firstOrNull { it.uuid == UUID.fromString(value) }
-            command = characteristic(UUID_COMMAND) ?: run { fail("Aranet4 history is unavailable"); return }
-            history = characteristic(UUID_HISTORY_V2) ?: run { fail("Aranet4 history format is unavailable"); return }
-            total = characteristic(UUID_TOTAL) ?: run { fail("Aranet4 history count is unavailable"); return }
-            interval = characteristic(UUID_INTERVAL) ?: run { fail("Aranet4 history interval is unavailable"); return }
-            state = State.TOTAL
-            read(total)
+            guarded {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    fail("Could not read Aranet4 services", status)
+                    return@guarded
+                }
+                fun characteristic(value: String): BluetoothGattCharacteristic? = gatt.services.asSequence()
+                    .flatMap { it.characteristics.asSequence() }
+                    .firstOrNull { it.uuid == UUID.fromString(value) }
+                command = characteristic(UUID_COMMAND) ?: run {
+                    fail("Aranet4 history is unavailable")
+                    return@guarded
+                }
+                history = characteristic(UUID_HISTORY_V2) ?: run {
+                    fail("Aranet4 history format is unavailable")
+                    return@guarded
+                }
+                total = characteristic(UUID_TOTAL) ?: run {
+                    fail("Aranet4 history count is unavailable")
+                    return@guarded
+                }
+                interval = characteristic(UUID_INTERVAL) ?: run {
+                    fail("Aranet4 history interval is unavailable")
+                    return@guarded
+                }
+                state = State.TOTAL
+                read(total)
+            }
         }
 
         @Deprecated("Used on Android 12 and earlier")
@@ -104,17 +137,17 @@ class AranetHistoryReader(private val context: Context) {
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             status: Int,
-        ) = handleRead(characteristic, characteristic.value ?: byteArrayOf(), status)
+        ) = guarded { handleRead(characteristic, characteristic.value ?: byteArrayOf(), status) }
 
         override fun onCharacteristicRead(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
             status: Int,
-        ) = handleRead(characteristic, value, status)
+        ) = guarded { handleRead(characteristic, value, status) }
 
         private fun handleRead(characteristic: BluetoothGattCharacteristic, bytes: ByteArray, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) { fail("Could not read Aranet4 history"); return }
+            if (status != BluetoothGatt.GATT_SUCCESS) { fail("Could not read Aranet4 history", status); return }
             when (state) {
                 State.TOTAL -> {
                     totalReadings = u16(bytes)
@@ -145,12 +178,14 @@ class AranetHistoryReader(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
-            if (state != State.COMMAND || status != BluetoothGatt.GATT_SUCCESS) {
-                fail("Could not request Aranet4 history")
-                return
+            guarded {
+                if (state != State.COMMAND || status != BluetoothGatt.GATT_SUCCESS) {
+                    fail("Could not request Aranet4 history", status)
+                    return@guarded
+                }
+                state = State.HISTORY
+                read(history)
             }
-            state = State.HISTORY
-            read(history)
         }
 
         private fun handlePacket(bytes: ByteArray) {
@@ -231,15 +266,31 @@ class AranetHistoryReader(private val context: Context) {
         }
 
         private fun succeed(readings: List<AranetReading>) = finish(Result.success(readings))
-        private fun fail(message: String) = finish(Result.failure(IllegalStateException(message)))
+        private fun fail(message: String, status: Int? = null, platformState: Int? = null) =
+            finish(Result.failure(AranetHistoryError(message, status, platformState, state.name)))
 
         private fun finish(result: Result<List<AranetReading>>) {
             if (finished) return
             finished = true
             handler.removeCallbacks(timeout)
+            result.exceptionOrNull()?.let { errors.report(it, "reading Aranet history") }
             runCatching { gatt?.disconnect() }
+                .onFailure { errors.report(it, "disconnecting Aranet history Bluetooth") }
             runCatching { gatt?.close() }
-            handler.post { complete(result) }
+                .onFailure { errors.report(it, "closing Aranet history Bluetooth") }
+            handler.post {
+                runCatching { complete(result) }
+                    .onFailure { errors.report(it, "delivering an Aranet history result") }
+            }
+        }
+
+        private inline fun guarded(block: () -> Unit) {
+            if (finished) return
+            try {
+                block()
+            } catch (error: Throwable) {
+                finish(Result.failure(error))
+            }
         }
 
         private fun u16(bytes: ByteArray): Int = if (bytes.size < 2) 0 else
@@ -257,3 +308,10 @@ class AranetHistoryReader(private val context: Context) {
         }
     }
 }
+
+internal class AranetHistoryError(
+    message: String,
+    val status: Int?,
+    val platformState: Int?,
+    val operationState: String,
+) : IllegalStateException(message)

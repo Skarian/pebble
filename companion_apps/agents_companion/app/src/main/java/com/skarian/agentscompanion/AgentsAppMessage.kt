@@ -2,6 +2,8 @@ package com.skarian.agentscompanion
 
 import android.content.Context
 import com.skarian.pebble.appmessage.AppMessageSession
+import com.skarian.pebble.errors.ErrorReporter
+import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 import java.util.UUID
 
@@ -9,13 +11,6 @@ data class PebbleSession(val appUuid: UUID, val watchId: String)
 
 internal const val AGENT_REFRESH_OPERATION = "refresh_agents"
 internal const val AGENT_HISTORY_OPERATION = "history"
-
-internal fun routerTerminalCategory(kind: PhoneEvent): String? = when (kind) {
-    PhoneEvent.COMPLETED -> "ok"
-    PhoneEvent.STATUS_UNKNOWN -> "status_unknown"
-    PhoneEvent.FAILED -> "agent_failed"
-    else -> null
-}
 
 /** Agents dictionaries and projections; AppMessage mechanics live in the shared session. */
 internal class AgentsAppMessage(context: Context) {
@@ -26,10 +21,13 @@ internal class AgentsAppMessage(context: Context) {
     suspend fun announceReady(watch: PebbleSession) =
         session.announceReady(watch.watchId, PebbleProtocol.ready())
 
+    suspend fun repeatReadyForOpenWatches() =
+        session.repeatReadyForOpenWatches(PebbleProtocol.ready())
+
     fun close(watch: PebbleSession) = session.close(watch.watchId)
 
-    fun messageReceived(watch: PebbleSession, operation: String, requestId: String) =
-        session.messageReceived(watch.watchId, operation, requestId)
+    suspend fun receiveWatchError(watch: PebbleSession, data: PebbleDictionary) =
+        session.receiveWatchError(watch.watchId, data)
 
     suspend fun send(
         watch: PebbleSession,
@@ -59,9 +57,6 @@ internal class AgentsAppMessage(context: Context) {
         sequence: Int = 0,
         ambiguous: Boolean = false,
     ): AppMessageSession.Delivery {
-        routerTerminalCategory(kind)?.let { category ->
-            record("send", requestId, "domain_terminal", category, watch)
-        }
         val projected = PebbleProtocol.projectText(text)
         val chunks = PebbleProtocol.chunkText(projected.text)
         val flags = (if (projected.truncated) PebbleProtocol.FLAG_TRUNCATED else 0) or
@@ -130,20 +125,17 @@ internal class AgentsAppMessage(context: Context) {
     fun abandonRead(watch: PebbleSession, operation: String, requestId: String) =
         session.abandonRead(watch.watchId, operation, requestId)
 
-    fun record(
-        operation: String,
-        requestId: String,
-        event: String,
-        category: String = "",
-        watch: PebbleSession? = null,
-    ) = session.record(operation, requestId, event, category, watch?.watchId)
-
     companion object {
-        private const val APP_NAME = "agents"
         fun appMessageSession(context: Context) = AppMessageSession(
             context.applicationContext,
             AgentsPebbleListenerService.WATCHAPP_UUID,
-            APP_NAME,
+            agentsErrorReporter(context),
+            "agents/watch@${BuildConfig.VERSION_NAME}",
         )
     }
 }
+
+internal fun agentsErrorReporter(context: Context): ErrorReporter = ErrorReporter.create(
+    context.applicationContext,
+    "agents/android@${BuildConfig.VERSION_NAME}",
+) { CompanionState(context.applicationContext, ErrorReporter.Disabled).sensitiveErrorValues() }
