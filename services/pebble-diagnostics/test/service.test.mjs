@@ -209,10 +209,11 @@ test('one diagnostic key accepts every app source and rotates atomically', async
     record('agents', 'agents/android@1'),
     record('cpap', 'cpap/pkjs@1'),
     record('air', 'air-quality/watch@1'),
+    record('hubitat', 'hubitat/pkjs@1'),
   ];
   assert.deepEqual((await api(handler, '/v1/errors', {
     method: 'POST', key: first.token, body: {records: values},
-  })).body.accepted, ['agents', 'cpap', 'air']);
+  })).body.accepted, ['agents', 'cpap', 'air', 'hubitat']);
   assert.equal(store.authorize(first.token, 'write').source_prefix, null);
   assert.equal((await api(handler, '/v1/errors', {
     method: 'POST', key: legacy, body: {records: [record('legacy-agent', 'agents/watch@1')]},
@@ -252,6 +253,7 @@ test('password-protected page creates and replaces the diagnostic key once', asy
   const page = await request(handler, '/diagnostics', {headers: {cookie}});
   assert.equal(page.status, 200);
   assert.match(page.text, /Create diagnostic key/);
+  assert.match(page.text, /Hubitat/);
   const csrf = page.text.match(/name="csrf" value="([^"]+)"/)[1];
   assert.equal((await submitForm(handler, '/diagnostics/key', {csrf}, {
     cookie, origin: 'https://evil.example',
@@ -261,6 +263,7 @@ test('password-protected page creates and replaces the diagnostic key once', asy
   const created = await submitForm(handler, '/diagnostics/key', {csrf}, {cookie});
   assert.equal(created.status, 200);
   assert.equal(created.headers['cache-control'], 'no-store');
+  assert.match(created.text, /Hubitat/);
   const token = created.text.match(/value="(pdiag_d_[^"]+)"/)[1];
   assert.doesNotThrow(() => store.authorize(token, 'write'));
   assert.equal(store.db.prepare('SELECT count(*) count FROM credentials WHERE token_hash=?')

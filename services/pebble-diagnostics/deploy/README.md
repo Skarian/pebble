@@ -81,7 +81,7 @@ unset PEBBLE_ADMIN_PASSWORD
 ```
 
 Then sign in at `https://pebble.exe.xyz/diagnostics`. Create the diagnostic key
-and copy that same write-only value into Agents, CPAP, and Air Quality. The raw
+and copy that same write-only value into Agents, CPAP, Air Quality, and Hubitat. The raw
 key is shown only in the creation response. Recreating it invalidates the
 previous shared key immediately, so update every app after rotation.
 

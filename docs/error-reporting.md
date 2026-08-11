@@ -1,6 +1,6 @@
 # Optional error reporting
 
-Agents, CPAP, and Air Quality can send source errors to Pebble Diagnostics.
+Agents, CPAP, Air Quality, and Hubitat can send source errors to Pebble Diagnostics.
 Reporting is off by default. When it is off, the reporters do not open storage,
 schedule uploads, or relay watch errors. A reporting or server failure never
 changes an app response or watch screen.
@@ -18,7 +18,8 @@ Use the app's existing settings screen:
 
 - Agents or Air Quality: open the Android companion and choose **Configure
   error reporting**.
-- CPAP: open the watchapp's configuration page and use **Error reporting**.
+- CPAP or Hubitat: open the watchapp's configuration page and use **Error
+  reporting**.
 
 Create or recreate the shared **Diagnostic key** at
 [pebble.exe.xyz](https://pebble.exe.xyz/diagnostics), then enter that same key in every app
@@ -41,11 +42,12 @@ tools/pebble-errors search invalid_grant
 tools/pebble-errors status
 ```
 
-Android keeps at most 128 queued records / 256 KiB per companion. CPAP keeps
-at most 50 / 64 KiB in its private PebbleKit JS storage. Watch staging is
-1.5 KiB for Agents and 2 KiB for CPAP and Air Quality; it is drained to the
-phone whenever the watchapp and its phone runtime are connected. Queue
-overflow is counted explicitly.
+Android keeps at most 128 queued records / 256 KiB per companion. CPAP and
+Hubitat each keep at most 50 / 64 KiB in private PebbleKit JS storage. Watch
+staging is 1.5 KiB for Agents, 2 KiB for CPAP and Air Quality, and 1 KiB for
+Hubitat so its 32-device cache and error queue fit Pebble's guaranteed 4 KiB
+persistent quota. It is drained to the phone whenever the watchapp and its
+phone runtime are connected. Queue overflow is counted explicitly.
 
 No reporter can preserve an error that occurs while reporting is disabled, an
 undetectable memory corruption, or a process or device failure before the

@@ -18,7 +18,15 @@ export const fakeRawDevices = [
     attributes: {lock: 'locked', battery: 19}, commands: [{command: 'lock'}, {command: 'unlock'}]}
 ];
 
-export function snapshotMessages(devices, {requestId = 1, fetchedAt = Math.floor(Date.now() / 1000), partial = false} = {}) {
+function requireRequestId(requestId) {
+  if (!Number.isInteger(requestId) || requestId < 1 || requestId > 65535) {
+    throw new TypeError('QA requestId must be a nonzero uint16');
+  }
+  return requestId;
+}
+
+export function snapshotMessages(devices, {requestId, fetchedAt = Math.floor(Date.now() / 1000), partial = false} = {}) {
+  requestId = requireRequestId(requestId);
   const normalized = Model.normalizeDevices(devices, []);
   const truncated = devices.length > normalized.length;
   return [
@@ -34,11 +42,13 @@ export function snapshotMessages(devices, {requestId = 1, fetchedAt = Math.floor
   ];
 }
 
-export function statusMessage(status, text, requestId = 1) {
+export function statusMessage(status, text, requestId) {
+  requestId = requireRequestId(requestId);
   return {PROTOCOL: 1, COMMAND: 0, REQUEST_ID: requestId, STATUS: status, ERROR_TEXT: text};
 }
 
-export function commandResult(status, text, requestId = 2) {
+export function commandResult(status, text, requestId) {
+  requestId = requireRequestId(requestId);
   return {PROTOCOL: 1, COMMAND: 7, REQUEST_ID: requestId, STATUS: status, ERROR_TEXT: text};
 }
 

@@ -25,9 +25,9 @@ attempt may mark that watch coredump as read even if writing the local file
 fails; any nonempty partial is preserved and labeled. The image may contain
 secrets. Normal watch-app faults are found in the
 non-destructive firmware log dump and do not require this option. Release Core
-does not expose its private rolling file log or CPAP's unsent PKJS localStorage
-through stock ADB, so the manifest reports those platform limits rather than
-claiming coverage.
+does not expose its private rolling file log or CPAP/Hubitat unsent PKJS
+localStorage through stock ADB, so the manifest reports those platform limits
+rather than claiming coverage.
 
 The default endpoint is `https://pebble.exe.xyz`. Override it for local tests
 with `PEBBLE_DIAGNOSTICS_URL`.

@@ -127,6 +127,54 @@ test('a failed batch item retries in place and another send cannot interleave', 
   assert.deepEqual(order, [1, 2, 2, 3, 4]);
 });
 
+test('a multipart read stamps and replays every dictionary without rerunning work', () => {
+  const seen = [];
+  const appMessages = session((dictionary, ok) => { seen.push(dictionary); ok(); });
+  let runs = 0;
+  function run(_requestId, done) {
+    runs += 1;
+    done([{PROTOCOL: 1, COMMAND: 3}, {PROTOCOL: 1, COMMAND: 5}]);
+  }
+
+  assert.equal(appMessages.handleRead(17, 'devices', run), true);
+  assert.equal(appMessages.handleRead(17, 'devices', run), true);
+
+  assert.equal(runs, 1);
+  assert.deepEqual(seen, [
+    {PROTOCOL: 1, COMMAND: 3, REQUEST_ID: 17},
+    {PROTOCOL: 1, COMMAND: 5, REQUEST_ID: 17},
+    {PROTOCOL: 1, COMMAND: 3, REQUEST_ID: 17},
+    {PROTOCOL: 1, COMMAND: 5, REQUEST_ID: 17},
+  ]);
+});
+
+test('empty or invalid multipart reads send one valid fallback and never become empty replays', () => {
+  const replies = [];
+  const errors = [];
+  const appMessages = session((dictionary, ok) => { replies.push(dictionary); ok(); }, {
+    errorReporter: {report: (error) => errors.push(error)},
+  });
+  const fallback = {PROTOCOL: 1, STATUS: 4};
+  let emptyRuns = 0;
+
+  appMessages.handleRead(21, 'empty', (_requestId, done) => {
+    emptyRuns += 1; done([]);
+  }, {failureResponse: fallback});
+  appMessages.handleRead(21, 'empty', () => { emptyRuns += 1; }, {failureResponse: fallback});
+  appMessages.handleRead(22, 'invalid', (_requestId, done) => {
+    done([{PROTOCOL: 1}, {VALUE: true}]);
+  }, {failureResponse: fallback});
+
+  assert.equal(emptyRuns, 1);
+  assert.deepEqual(replies, [
+    {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 21},
+    {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 21},
+    {PROTOCOL: 1, STATUS: 4, REQUEST_ID: 22},
+  ]);
+  assert.ok(errors.some((error) => error.code === 'empty_read_response'));
+  assert.ok(errors.some((error) => error.code === 'invalid_dictionary_value'));
+});
+
 test('a missing callback times out, ignores its late callback, and releases the queue', () => {
   const clock = timers();
   const order = [];

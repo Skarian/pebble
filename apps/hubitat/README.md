@@ -38,6 +38,12 @@ In Hubitat:
 Open Hubitat Settings in the Pebble phone app, paste the token, and save. Return
 to the watch and press Select on the overview to sync.
 
+Optional error reporting is available on the same settings page. It is off by
+default. To enable it, create the shared **Diagnostic key** at
+[pebble.exe.xyz](https://pebble.exe.xyz/diagnostics), paste that key into
+Hubitat, and enable **Send errors to Pebble Diagnostics**. The key stays in the
+phone runtime; the watch receives only the enabled bit.
+
 The token stays in this app's private PebbleKit JS storage on the phone and is
 never sent to the watch. Control commands are limited to on, off, lock, and
 unlock. The app only controls device IDs returned by the latest authorized
@@ -53,5 +59,5 @@ pebble build
 
 The installable file is `build/hubitat.pbw`.
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for Maker API behavior, diagnostics,
+See [DEVELOPMENT.md](DEVELOPMENT.md) for Maker API behavior, error reporting,
 fake and live QA, security rules, and project identifiers.

@@ -9,6 +9,23 @@ function text(value, fallback) {
   return String(value);
 }
 
+function utf8(value, limit) {
+  value = String(value || '');
+  var result = '', bytes = 0;
+  for (var index = 0; index < value.length;) {
+    var first = value.charCodeAt(index), width = 1, count;
+    if (first >= 0xd800 && first <= 0xdbff && index + 1 < value.length) {
+      var second = value.charCodeAt(index + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) { width = 2; count = 4; }
+    }
+    if (!count) count = first < 0x80 ? 1 : first < 0x800 ? 2 : 3;
+    if (bytes + count > limit) break;
+    result += value.slice(index, index + width);
+    bytes += count; index += width;
+  }
+  return result;
+}
+
 function has(values, name) {
   return values.some(function (value) { return String(value).toLowerCase() === name; });
 }
@@ -83,13 +100,18 @@ function normalizeDevice(device) {
   var attrs = attributes(device);
   var kind = classify(device);
   var battery = Number(attrs.battery);
+  var id = text(device.id);
+  if (!id || utf8(id, 11) !== id) {
+    var error = new RangeError('Hubitat device ID exceeds the watch protocol limit');
+    error.deviceId = id; throw error;
+  }
   return {
-    id: text(device.id),
-    label: text(device.label || device.name, 'Unnamed').slice(0, 24),
+    id: id,
+    label: utf8(text(device.label || device.name, 'Unnamed'), 24),
     kind: KIND[kind],
     kindName: kind,
-    primary: primaryFor(kind, attrs).slice(0, 24),
-    secondary: secondaryFor(kind, attrs).slice(0, 24),
+    primary: utf8(primaryFor(kind, attrs), 24),
+    secondary: utf8(secondaryFor(kind, attrs), 24),
     battery: Number.isFinite(battery) && battery >= 0 && battery <= 100 ? Math.round(battery) : 255,
     controlFlags: controlFlags(kind, device)
   };

@@ -36,7 +36,14 @@
       "CONTROL_FLAGS": 14,
       "ACTION": 15,
       "RESULT_TEXT": 16,
-      "PARTIAL": 17
+      "PARTIAL": 17,
+      "ERROR_COMMAND": 120,
+      "ERROR_GENERATION": 121,
+      "ERROR_SEQUENCE": 122,
+      "ERROR_AT": 123,
+      "ERROR_DATA": 124,
+      "ERROR_DROPPED": 125,
+      "ERROR_ENABLED": 126
     },
     "resources": {
       "media": [

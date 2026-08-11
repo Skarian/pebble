@@ -1,10 +1,13 @@
 #include <pebble.h>
+#include <app_message_client.h>
 
 #define MAX_DEVICES 32
 #define CACHE_VERSION 1
 #define PERSIST_HEADER_KEY 7300
 #define PERSIST_DEVICE_KEY_BASE 7310
-#define RESPONSE_TIMEOUT_MS 30000
+#define PERSIST_ERRORS_KEY 7400
+#define ERROR_STORAGE_BYTES 1024
+#define ERROR_STORAGE_METADATA_BYTES 21
 #define TEXT_LABEL 25
 #define TEXT_VALUE 25
 
@@ -41,6 +44,10 @@ typedef struct {
   uint32_t fetched_at;
 } CacheHeader;
 
+_Static_assert(sizeof(CacheHeader) + MAX_DEVICES * sizeof(DeviceState) +
+    ERROR_STORAGE_BYTES + ERROR_STORAGE_METADATA_BYTES <= 4096,
+    "Hubitat cache and diagnostics exceed Pebble persistent storage");
+
 static Window *s_window;
 static TextLayer *s_brand_layer;
 static TextLayer *s_page_layer;
@@ -49,7 +56,8 @@ static TextLayer *s_primary_layer;
 static TextLayer *s_secondary_layer;
 static TextLayer *s_meta_layer;
 static TextLayer *s_footer_layer;
-static AppTimer *s_response_timer;
+static AppMessageClient *s_phone;
+static ErrorReporter *s_errors;
 
 static CacheHeader s_header;
 static CacheHeader s_staging_header;
@@ -57,32 +65,43 @@ static DeviceState s_devices[MAX_DEVICES];
 static DeviceState s_staging[MAX_DEVICES];
 static bool s_has_cache;
 static bool s_staging_active;
+static uint32_t s_staging_received;
 static bool s_loading;
 static bool s_confirming;
 static uint8_t s_status;
 static uint8_t s_page_index;
 static uint8_t s_command_device_index;
-static uint16_t s_request_id;
 static char s_error_text[48];
 static char s_action[10];
 
 static void render(void);
 
-static void copy_text(char *destination, size_t size, Tuple *tuple) {
-  if (!tuple || tuple->type != TUPLE_CSTRING) {
-    destination[0] = '\0';
-    return;
-  }
-  snprintf(destination, size, "%s", tuple->value->cstring);
-}
+#define report_error(function, code, symbol, while_doing) \
+  ERROR_REPORT(s_errors, ((ErrorValue){ \
+    (function), (code), (symbol), NULL}), (while_doing))
 
-static uint32_t tuple_uint(DictionaryIterator *iterator, uint32_t key, uint32_t fallback) {
-  Tuple *tuple = dict_find(iterator, key);
-  return tuple ? tuple->value->uint32 : fallback;
+static bool copy_text(char *destination, size_t size, Tuple *tuple) {
+  const char *value;
+  if (!app_message_tuple_cstring(tuple, &value) || tuple->length > size) {
+    destination[0] = '\0';
+    return false;
+  }
+  snprintf(destination, size, "%s", value);
+  return true;
 }
 
 static bool device_has_control(const DeviceState *device) {
   return device->control_flags != 0;
+}
+
+static bool device_valid(const DeviceState *device) {
+  return memchr(device->id, '\0', sizeof(device->id)) &&
+      memchr(device->label, '\0', sizeof(device->label)) &&
+      memchr(device->primary, '\0', sizeof(device->primary)) &&
+      memchr(device->secondary, '\0', sizeof(device->secondary)) &&
+      device->kind <= KIND_LOCK &&
+      (device->battery <= 100 || device->battery == 255) &&
+      device->control_flags <= 15;
 }
 
 static uint8_t page_count(void) {
@@ -100,21 +119,22 @@ static uint8_t device_page_for(uint8_t device_index) {
 }
 
 static void persist_cache(void) {
-  persist_write_data(PERSIST_HEADER_KEY, &s_header, sizeof(s_header));
-  for (uint8_t i = 0; i < s_header.count; i++) {
-    persist_write_data(PERSIST_DEVICE_KEY_BASE + i, &s_devices[i], sizeof(DeviceState));
+  int result = persist_write_data(PERSIST_HEADER_KEY, &s_header, sizeof(s_header));
+  if (result != (int)sizeof(s_header)) {
+    report_error("persist_write_data", result, "PERSIST_WRITE_FAILED",
+        "saving Hubitat device cache");
   }
-}
-
-static void cancel_response_timer(void) {
-  if (s_response_timer) {
-    app_timer_cancel(s_response_timer);
-    s_response_timer = NULL;
+  for (uint8_t i = 0; i < s_header.count; i++) {
+    result = persist_write_data(
+        PERSIST_DEVICE_KEY_BASE + i, &s_devices[i], sizeof(DeviceState));
+    if (result != (int)sizeof(DeviceState)) {
+      report_error("persist_write_data", result, "PERSIST_WRITE_FAILED",
+          "saving Hubitat device cache");
+    }
   }
 }
 
 static void show_failure(uint8_t status, const char *text) {
-  cancel_response_timer();
   s_loading = false;
   s_staging_active = false;
   s_status = status;
@@ -122,29 +142,20 @@ static void show_failure(uint8_t status, const char *text) {
   render();
 }
 
-static void response_timeout(void *context) {
-  s_response_timer = NULL;
-  if (s_loading) show_failure(s_status == STATUS_COMMAND_PENDING ? STATUS_COMMAND_FAILURE : STATUS_TIMEOUT,
-                              "Phone response timed out");
-}
-
 static void request_refresh(void) {
-  if (s_loading) return;
-  DictionaryIterator *out;
-  if (app_message_outbox_begin(&out) != APP_MSG_OK) {
-    show_failure(STATUS_NETWORK, "Cannot contact phone");
-    return;
-  }
-  s_request_id += 1;
-  dict_write_uint8(out, MESSAGE_KEY_PROTOCOL, 1);
-  dict_write_uint8(out, MESSAGE_KEY_COMMAND, CMD_REFRESH);
-  dict_write_uint16(out, MESSAGE_KEY_REQUEST_ID, s_request_id);
-  app_message_outbox_send();
+  if (s_loading || app_message_client_is_active(s_phone)) return;
   s_loading = true;
   s_status = STATUS_OK;
   s_confirming = false;
-  cancel_response_timer();
-  s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
+  AppMessageStartResult result = app_message_client_start(
+      s_phone, CMD_REFRESH, APP_MESSAGE_OPERATION_READ, NULL,
+      APP_MESSAGE_SEND_PRIMARY);
+  if (result != APP_MESSAGE_START_STARTED &&
+      result != APP_MESSAGE_START_COALESCED) {
+    report_error("app_message_client_start", result, "APP_MESSAGE_START_FAILED",
+        "refreshing Hubitat devices");
+    show_failure(STATUS_NETWORK, "Cannot contact phone");
+  }
   render();
 }
 
@@ -182,24 +193,19 @@ static void send_control(uint8_t device_index) {
   if (!action[0]) return;
   s_command_device_index = device_index;
   snprintf(s_action, sizeof(s_action), "%s", action);
-  DictionaryIterator *out;
-  if (app_message_outbox_begin(&out) != APP_MSG_OK) {
-    show_failure(STATUS_COMMAND_FAILURE, "Cannot contact phone");
-    return;
-  }
-  s_request_id += 1;
-  dict_write_uint8(out, MESSAGE_KEY_PROTOCOL, 1);
-  dict_write_uint8(out, MESSAGE_KEY_COMMAND, CMD_CONTROL);
-  dict_write_uint16(out, MESSAGE_KEY_REQUEST_ID, s_request_id);
-  dict_write_cstring(out, MESSAGE_KEY_DEVICE_ID, device->id);
-  dict_write_cstring(out, MESSAGE_KEY_ACTION, action);
-  app_message_outbox_send();
   s_confirming = false;
   s_loading = true;
   s_status = STATUS_COMMAND_PENDING;
   snprintf(s_error_text, sizeof(s_error_text), "%s pending", action);
-  cancel_response_timer();
-  s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
+  AppMessageStartResult result = app_message_client_start(
+      s_phone, CMD_CONTROL, APP_MESSAGE_OPERATION_MUTATION, NULL,
+      APP_MESSAGE_SEND_PRIMARY);
+  if (result != APP_MESSAGE_START_STARTED &&
+      result != APP_MESSAGE_START_COALESCED) {
+    report_error("app_message_client_start", result, "APP_MESSAGE_START_FAILED",
+        "controlling a Hubitat device");
+    show_failure(STATUS_COMMAND_FAILURE, "Cannot contact phone");
+  }
   render();
 }
 
@@ -269,7 +275,8 @@ static void render_state(const char *title, const char *body, const char *footer
 }
 
 static void render(void) {
-  if (!s_window) return;
+  if (!s_window || !s_page_layer || !s_label_layer || !s_primary_layer ||
+      !s_secondary_layer || !s_meta_layer || !s_footer_layer) return;
   static char primary[32], secondary[32], meta[32], footer[32];
   primary[0] = secondary[0] = meta[0] = footer[0] = '\0';
   if (s_loading && s_status != STATUS_COMMAND_PENDING) {
@@ -340,55 +347,134 @@ static void render(void) {
   }
 }
 
-static void inbox_received(DictionaryIterator *iterator, void *context) {
-  Tuple *protocol = dict_find(iterator, MESSAGE_KEY_PROTOCOL);
-  if (protocol && protocol->value->uint8 != 1) return;
-  Tuple *command_tuple = dict_find(iterator, MESSAGE_KEY_COMMAND);
-  uint8_t command = command_tuple ? command_tuple->value->uint8 : 0;
-  if (command == CMD_PHONE_READY) return;
-  Tuple *response_id = dict_find(iterator, MESSAGE_KEY_REQUEST_ID);
-  if (response_id && response_id->value->uint16 != s_request_id) return;
+static DictionaryResult write_request(
+    DictionaryIterator *iterator,
+    const AppMessageClientStatus *request,
+    void *context) {
+  (void)context;
+  if (request->operation != CMD_CONTROL) return DICT_OK;
+  if (s_command_device_index >= s_header.count) return DICT_INVALID_ARGS;
+  DictionaryResult result = dict_write_cstring(
+      iterator, MESSAGE_KEY_DEVICE_ID, s_devices[s_command_device_index].id);
+  if (result == DICT_OK) {
+    result = dict_write_cstring(iterator, MESSAGE_KEY_ACTION, s_action);
+  }
+  return result;
+}
 
+static bool required_uint(
+    DictionaryIterator *iterator, uint32_t key, uint32_t *value) {
+  return app_message_tuple_uint(dict_find(iterator, key), value);
+}
+
+static AppMessageResponseAction invalid_response(
+    int32_t code, const char *symbol, const char *while_doing) {
+  report_error("receive_response", code, symbol, while_doing);
+  show_failure(STATUS_SERVICE, "Hubitat is unavailable");
+  return APP_MESSAGE_RESPONSE_DONE;
+}
+
+static AppMessageResponseAction receive_response(
+    DictionaryIterator *iterator,
+    const AppMessageClientStatus *request,
+    void *context) {
+  (void)context;
+  uint32_t protocol = 0, command = 0;
+  if (!required_uint(iterator, MESSAGE_KEY_PROTOCOL, &protocol) || protocol != 1) {
+    return invalid_response((int32_t)protocol, "PROTOCOL_VERSION_MISMATCH",
+        "parsing Hubitat response");
+  }
+  if (!required_uint(iterator, MESSAGE_KEY_COMMAND, &command) || command > CMD_RESULT) {
+    return invalid_response((int32_t)command, "COMMAND_INVALID",
+        "parsing Hubitat response");
+  }
+  uint32_t status = STATUS_OK;
   Tuple *status_tuple = dict_find(iterator, MESSAGE_KEY_STATUS);
-  uint8_t status = status_tuple ? status_tuple->value->uint8 : STATUS_OK;
-  Tuple *error = dict_find(iterator, MESSAGE_KEY_ERROR_TEXT);
+  if (status_tuple && (!app_message_tuple_uint(status_tuple, &status) ||
+      status > STATUS_COMMAND_FAILURE)) {
+    return invalid_response((int32_t)status, "STATUS_INVALID",
+        "parsing Hubitat response");
+  }
 
-  if (status == STATUS_LOADING) {
+  if (status == STATUS_LOADING && command == 0 &&
+      request->operation == CMD_REFRESH) {
     s_loading = true;
     s_status = STATUS_OK;
-    cancel_response_timer();
-    s_response_timer = app_timer_register(RESPONSE_TIMEOUT_MS, response_timeout, NULL);
     render();
-    return;
+    return APP_MESSAGE_RESPONSE_MORE;
   }
-  if (command == CMD_DATA_BEGIN) {
+  if (command == CMD_DATA_BEGIN && request->operation == CMD_REFRESH &&
+      status == STATUS_OK) {
+    uint32_t count = 0, fetched_at = 0;
+    if (!required_uint(iterator, MESSAGE_KEY_COUNT, &count) || count > MAX_DEVICES ||
+        !required_uint(iterator, MESSAGE_KEY_FETCHED_AT, &fetched_at)) {
+      return invalid_response((int32_t)count, "SNAPSHOT_HEADER_INVALID",
+          "parsing Hubitat device snapshot");
+    }
     memset(&s_staging_header, 0, sizeof(s_staging_header));
     memset(s_staging, 0, sizeof(s_staging));
     s_staging_header.version = CACHE_VERSION;
-    s_staging_header.count = tuple_uint(iterator, MESSAGE_KEY_COUNT, 0);
-    if (s_staging_header.count > MAX_DEVICES) s_staging_header.count = MAX_DEVICES;
-    s_staging_header.fetched_at = tuple_uint(iterator, MESSAGE_KEY_FETCHED_AT, 0);
+    s_staging_header.count = (uint8_t)count;
+    s_staging_header.fetched_at = fetched_at;
+    s_staging_received = 0;
     s_staging_active = true;
-    return;
+    return APP_MESSAGE_RESPONSE_MORE;
   }
-  if (command == CMD_DEVICE && s_staging_active) {
-    uint8_t index = tuple_uint(iterator, MESSAGE_KEY_DEVICE_INDEX, MAX_DEVICES);
-    if (index >= s_staging_header.count || index >= MAX_DEVICES) return;
-    DeviceState *device = &s_staging[index];
-    copy_text(device->id, sizeof(device->id), dict_find(iterator, MESSAGE_KEY_DEVICE_ID));
-    copy_text(device->label, sizeof(device->label), dict_find(iterator, MESSAGE_KEY_DEVICE_LABEL));
-    copy_text(device->primary, sizeof(device->primary), dict_find(iterator, MESSAGE_KEY_PRIMARY_VALUE));
-    copy_text(device->secondary, sizeof(device->secondary), dict_find(iterator, MESSAGE_KEY_SECONDARY_VALUE));
-    device->kind = tuple_uint(iterator, MESSAGE_KEY_DEVICE_KIND, KIND_UNKNOWN);
-    device->battery = tuple_uint(iterator, MESSAGE_KEY_BATTERY, 255);
-    device->control_flags = tuple_uint(iterator, MESSAGE_KEY_CONTROL_FLAGS, 0);
-    return;
+  if (command == CMD_DEVICE && request->operation == CMD_REFRESH) {
+    uint32_t index = 0, kind = 0, battery = 0, flags = 0;
+    bool valid = status == STATUS_OK && s_staging_active &&
+        required_uint(iterator, MESSAGE_KEY_DEVICE_INDEX, &index) &&
+        index < s_staging_header.count && index < MAX_DEVICES &&
+        required_uint(iterator, MESSAGE_KEY_DEVICE_KIND, &kind) && kind <= KIND_LOCK &&
+        required_uint(iterator, MESSAGE_KEY_BATTERY, &battery) &&
+        (battery <= 100 || battery == 255) &&
+        required_uint(iterator, MESSAGE_KEY_CONTROL_FLAGS, &flags) && flags <= 15;
+    if (!valid) {
+      return invalid_response(-1, "DEVICE_FIELDS_INVALID",
+          "parsing Hubitat device snapshot");
+    }
+    DeviceState candidate = {0};
+    valid = copy_text(candidate.id, sizeof(candidate.id),
+        dict_find(iterator, MESSAGE_KEY_DEVICE_ID)) &&
+      copy_text(candidate.label, sizeof(candidate.label),
+        dict_find(iterator, MESSAGE_KEY_DEVICE_LABEL)) &&
+      copy_text(candidate.primary, sizeof(candidate.primary),
+        dict_find(iterator, MESSAGE_KEY_PRIMARY_VALUE)) &&
+      copy_text(candidate.secondary, sizeof(candidate.secondary),
+        dict_find(iterator, MESSAGE_KEY_SECONDARY_VALUE));
+    if (!valid) {
+      return invalid_response((int32_t)index, "DEVICE_TEXT_INVALID",
+          "parsing Hubitat device snapshot");
+    }
+    candidate.kind = (uint8_t)kind;
+    candidate.battery = (uint8_t)battery;
+    candidate.control_flags = (uint8_t)flags;
+    uint32_t bit = (uint32_t)1 << index;
+    if (s_staging_received & bit) {
+      if (memcmp(&s_staging[index], &candidate, sizeof(candidate)) == 0) {
+        return APP_MESSAGE_RESPONSE_MORE;
+      }
+      return invalid_response((int32_t)index, "DEVICE_CONFLICT",
+          "parsing Hubitat device snapshot");
+    }
+    s_staging[index] = candidate;
+    s_staging_received |= bit;
+    return APP_MESSAGE_RESPONSE_MORE;
   }
-  if (command == CMD_DATA_END && s_staging_active) {
-    cancel_response_timer();
+  if (command == CMD_DATA_END && request->operation == CMD_REFRESH) {
+    uint32_t partial;
+    uint32_t expected = s_staging_header.count == 32 ? UINT32_MAX :
+        (((uint32_t)1 << s_staging_header.count) - 1);
+    if (!s_staging_active || (status != STATUS_OK && status != STATUS_PARTIAL) ||
+        !required_uint(iterator, MESSAGE_KEY_PARTIAL, &partial) || partial > 1 ||
+        ((status == STATUS_PARTIAL) != (partial == 1)) ||
+        s_staging_received != expected) {
+      return invalid_response((int32_t)s_staging_received,
+          "SNAPSHOT_SEQUENCE_INVALID", "parsing Hubitat device snapshot");
+    }
     s_loading = false;
     s_staging_active = false;
-    s_staging_header.partial = tuple_uint(iterator, MESSAGE_KEY_PARTIAL, status == STATUS_PARTIAL);
+    s_staging_header.partial = (uint8_t)partial;
     if (s_staging_header.count > 0) {
       s_header = s_staging_header;
       memcpy(s_devices, s_staging, sizeof(s_devices));
@@ -396,20 +482,28 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
       persist_cache();
       s_page_index = 0;
     }
-    s_status = status;
+    s_status = (uint8_t)status;
     render();
-    return;
+    return APP_MESSAGE_RESPONSE_DONE;
   }
-  if (command == CMD_RESULT) {
+  if (command == CMD_RESULT && request->operation == CMD_CONTROL) {
     if (status == STATUS_COMMAND_PENDING) {
       s_loading = true;
       s_status = STATUS_COMMAND_PENDING;
       render();
-      return;
+      return APP_MESSAGE_RESPONSE_MORE;
     }
-    cancel_response_timer();
+    if (status != STATUS_COMMAND_SUCCESS && status != STATUS_COMMAND_FAILURE) {
+      return invalid_response((int32_t)status, "COMMAND_RESULT_INVALID",
+          "parsing Hubitat control response");
+    }
     s_loading = false;
-    copy_text(s_error_text, sizeof(s_error_text), error);
+    Tuple *error = dict_find(iterator, MESSAGE_KEY_ERROR_TEXT);
+    if (error && !copy_text(s_error_text, sizeof(s_error_text), error)) {
+      return invalid_response(error->length, "ERROR_TEXT_INVALID",
+          "parsing Hubitat control response");
+    }
+    if (!error) s_error_text[0] = '\0';
     if (status == STATUS_COMMAND_SUCCESS && s_command_device_index < s_header.count) {
       DeviceState *device = &s_devices[s_command_device_index];
       if (strcmp(s_action, "on") == 0) snprintf(device->primary, sizeof(device->primary), "on");
@@ -418,29 +512,42 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
       else if (strcmp(s_action, "unlock") == 0) snprintf(device->primary, sizeof(device->primary), "unlocked");
       persist_cache();
       s_status = STATUS_OK;
-      s_page_index = device_page_for(s_command_device_index);
     } else {
       s_status = STATUS_COMMAND_FAILURE;
-      s_page_index = device_page_for(s_command_device_index);
     }
+    s_page_index = device_page_for(s_command_device_index);
     render();
-    return;
+    return APP_MESSAGE_RESPONSE_DONE;
   }
-  if (status != STATUS_OK) {
-    char text[48];
-    copy_text(text, sizeof(text), error);
-    show_failure(status, text);
+  if (command == 0 && status >= STATUS_SETUP && status <= STATUS_TIMEOUT) {
+    char text[48] = "";
+    Tuple *error = dict_find(iterator, MESSAGE_KEY_ERROR_TEXT);
+    if (error && !copy_text(text, sizeof(text), error)) {
+      return invalid_response(error->length, "ERROR_TEXT_INVALID",
+          "parsing Hubitat error response");
+    }
+    show_failure((uint8_t)status, text);
+    return APP_MESSAGE_RESPONSE_DONE;
   }
+  return invalid_response((int32_t)command, "RESPONSE_SEQUENCE_INVALID",
+      "parsing Hubitat response");
 }
 
-static void inbox_dropped(AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_WARNING, "Hubitat inbox dropped: %d", reason);
+static void unsolicited_response(DictionaryIterator *iterator, void *context) {
+  (void)iterator; (void)context;
+  report_error("receive_response", 0, "REQUEST_ID_MISSING",
+      "correlating Hubitat response");
 }
 
-static void outbox_failed(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_WARNING, "Hubitat outbox failed: %d", reason);
-  show_failure(s_status == STATUS_COMMAND_PENDING ? STATUS_COMMAND_FAILURE : STATUS_NETWORK,
-               "Phone delivery failed");
+static void phone_request_failed(
+    const AppMessageFailureInfo *failure,
+    void *context) {
+  (void)context;
+  bool control = failure->operation == CMD_CONTROL;
+  bool timeout = failure->failure == APP_MESSAGE_FAILURE_RESPONSE_TIMEOUT ||
+      failure->failure == APP_MESSAGE_FAILURE_RECONCILE_TIMEOUT;
+  show_failure(control ? STATUS_COMMAND_FAILURE : timeout ? STATUS_TIMEOUT : STATUS_NETWORK,
+      timeout ? "Phone response timed out" : "Phone delivery failed");
 }
 
 static void clear_result(void) {
@@ -496,6 +603,8 @@ static void click_config_provider(void *context) {
 static TextLayer *make_text(Layer *parent, GRect frame, const char *font,
                             GTextAlignment alignment) {
   TextLayer *layer = text_layer_create(frame);
+  ERROR_REPORT_NULL(s_errors, layer, "text_layer_create", "creating Hubitat screen");
+  if (!layer) return NULL;
   text_layer_set_background_color(layer, GColorClear);
   text_layer_set_text_color(layer, GColorBlack);
   text_layer_set_font(layer, fonts_get_system_font(font));
@@ -512,54 +621,97 @@ static void window_load(Window *window) {
   s_page_layer = make_text(root, GRect(106, 0, bounds.size.w - 113, 28), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
   s_label_layer = make_text(root, GRect(8, 36, bounds.size.w - 16, 32), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
   s_primary_layer = make_text(root, GRect(8, 66, bounds.size.w - 16, 54), FONT_KEY_GOTHIC_28_BOLD, GTextAlignmentCenter);
-  text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeWordWrap);
   s_secondary_layer = make_text(root, GRect(8, 119, bounds.size.w - 16, 30), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
   s_meta_layer = make_text(root, GRect(8, 153, bounds.size.w - 16, 44), FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter);
   s_footer_layer = make_text(root, GRect(7, 204, bounds.size.w - 14, 22), FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter);
+  if (!s_brand_layer || !s_page_layer || !s_label_layer || !s_primary_layer ||
+      !s_secondary_layer || !s_meta_layer || !s_footer_layer) return;
+  text_layer_set_overflow_mode(s_primary_layer, GTextOverflowModeWordWrap);
   text_layer_set_text(s_brand_layer, "HUBITAT");
   render();
 }
 
 static void window_unload(Window *window) {
-  text_layer_destroy(s_brand_layer); text_layer_destroy(s_page_layer);
-  text_layer_destroy(s_label_layer); text_layer_destroy(s_primary_layer);
-  text_layer_destroy(s_secondary_layer); text_layer_destroy(s_meta_layer);
-  text_layer_destroy(s_footer_layer);
+  if (s_brand_layer) text_layer_destroy(s_brand_layer);
+  if (s_page_layer) text_layer_destroy(s_page_layer);
+  if (s_label_layer) text_layer_destroy(s_label_layer);
+  if (s_primary_layer) text_layer_destroy(s_primary_layer);
+  if (s_secondary_layer) text_layer_destroy(s_secondary_layer);
+  if (s_meta_layer) text_layer_destroy(s_meta_layer);
+  if (s_footer_layer) text_layer_destroy(s_footer_layer);
 }
 
 static void load_cache(void) {
-  if (!persist_exists(PERSIST_HEADER_KEY) ||
-      persist_get_size(PERSIST_HEADER_KEY) != (int)sizeof(CacheHeader) ||
-      persist_read_data(PERSIST_HEADER_KEY, &s_header, sizeof(s_header)) != (int)sizeof(s_header) ||
-      s_header.version != CACHE_VERSION || s_header.count == 0 || s_header.count > MAX_DEVICES) return;
+  if (!persist_exists(PERSIST_HEADER_KEY)) return;
+  int size = persist_get_size(PERSIST_HEADER_KEY);
+  int result = size == (int)sizeof(CacheHeader)
+      ? persist_read_data(PERSIST_HEADER_KEY, &s_header, sizeof(s_header)) : size;
+  if (result != (int)sizeof(s_header) || s_header.version != CACHE_VERSION ||
+      s_header.count == 0 || s_header.count > MAX_DEVICES || s_header.partial > 1) {
+    report_error("persist_read_data", result, "CACHE_HEADER_INVALID",
+        "loading Hubitat device cache");
+    return;
+  }
   for (uint8_t i = 0; i < s_header.count; i++) {
-    if (persist_get_size(PERSIST_DEVICE_KEY_BASE + i) != (int)sizeof(DeviceState) ||
-        persist_read_data(PERSIST_DEVICE_KEY_BASE + i, &s_devices[i], sizeof(DeviceState)) != (int)sizeof(DeviceState)) return;
+    size = persist_get_size(PERSIST_DEVICE_KEY_BASE + i);
+    result = size == (int)sizeof(DeviceState) ? persist_read_data(
+        PERSIST_DEVICE_KEY_BASE + i, &s_devices[i], sizeof(DeviceState)) : size;
+    if (result != (int)sizeof(DeviceState) || !device_valid(&s_devices[i])) {
+      report_error("persist_read_data", result, "CACHE_DEVICE_INVALID",
+          "loading Hubitat device cache");
+      return;
+    }
   }
   s_has_cache = true;
 }
 
 static void init(void) {
+  s_errors = error_reporter_create(&(ErrorReporterConfig){
+    .persist_key = PERSIST_ERRORS_KEY,
+    .storage_bytes = ERROR_STORAGE_BYTES,
+  });
+  if (!s_errors) {
+    APP_LOG(APP_LOG_LEVEL_ERROR,
+        "pebble-errors source=hubitat/watch reporter=create_failed");
+  }
   memset(&s_header, 0, sizeof(s_header));
   memset(s_devices, 0, sizeof(s_devices));
   s_status = STATUS_OK;
   load_cache();
   s_window = window_create();
+  ERROR_REPORT_NULL(s_errors, s_window, "window_create", "creating Hubitat screen");
+  if (!s_window) return;
   window_set_background_color(s_window, GColorWhite);
   window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
   window_set_click_config_provider(s_window, click_config_provider);
-  app_message_register_inbox_received(inbox_received);
-  app_message_register_inbox_dropped(inbox_dropped);
-  app_message_register_outbox_failed(outbox_failed);
-  app_message_open(1024, 256);
+  AppMessageClientConfig phone_config = {
+    .inbox_size = 1024,
+    .outbox_size = PEBBLE_ERROR_OUTBOX_BYTES,
+    .protocol = {
+      .protocol_key = MESSAGE_KEY_PROTOCOL,
+      .command_key = MESSAGE_KEY_COMMAND,
+      .request_id_key = MESSAGE_KEY_REQUEST_ID,
+      .protocol_version = 1,
+      .ready_command = CMD_PHONE_READY,
+      .request_id_codec = APP_MESSAGE_ID_UINT16,
+    },
+    .write_payload = write_request,
+    .response_received = receive_response,
+    .unsolicited_received = unsolicited_response,
+    .request_failed = phone_request_failed,
+    .errors = s_errors,
+  };
+  AppMessageResult open_result;
+  s_phone = app_message_client_open(&phone_config, &open_result);
   window_stack_push(s_window, true);
-  request_refresh();
+  if (open_result == APP_MSG_OK) request_refresh();
+  else show_failure(STATUS_NETWORK, "Cannot contact phone");
 }
 
 static void deinit(void) {
-  cancel_response_timer();
-  app_message_deregister_callbacks();
-  window_destroy(s_window);
+  app_message_client_close(s_phone);
+  if (s_window) window_destroy(s_window);
+  error_reporter_destroy(s_errors);
 }
 
 int main(void) {

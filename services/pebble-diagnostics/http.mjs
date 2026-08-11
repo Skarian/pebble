@@ -74,7 +74,7 @@ function adminPage(store, session) {
   const action = active
     ? `<p class="warning"><strong>Recreating the key invalidates the current key immediately.</strong> Errors remain queued in each app until you paste the replacement there.</p><form method="post" action="/diagnostics/key"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><input type="hidden" name="expected" value="${escapeHtml(active.fingerprint)}"><button class="danger">Recreate diagnostic key</button></form>`
     : `<form method="post" action="/diagnostics/key"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><button>Create diagnostic key</button></form>`;
-  return `<h1>Pebble Diagnostics</h1><p>One write-only key works in Agents, CPAP, and Air Quality. It cannot read stored errors.</p>${active
+  return `<h1>Pebble Diagnostics</h1><p>One write-only key works in Agents, CPAP, Air Quality, and Hubitat. It cannot read stored errors.</p>${active
     ? `<div class="meta"><strong>Current key</strong><br><code>${escapeHtml(active.fingerprint)}</code><br><span class="muted">Created ${escapeHtml(active.createdAt)}</span></div>`
     : '<p class="meta">No shared diagnostic key exists yet.</p>'}${action}<form method="post" action="/logout"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><p><button>Log out</button></p></form>`;
 }
@@ -190,7 +190,7 @@ export function createDiagnosticsHandler({
           }
           throw error;
         }
-        return html(response, 200, 'Diagnostic key created', `<h1>Diagnostic key created</h1><p>Copy this key now. It will not be shown again.</p><label for="diagnostic-key">Diagnostic key</label><input id="diagnostic-key" class="secret" readonly value="${escapeHtml(created.token)}"><p class="muted">Paste the same key into Agents, CPAP, and Air Quality.</p><p><a href="/diagnostics">Return to diagnostics</a></p>`);
+        return html(response, 200, 'Diagnostic key created', `<h1>Diagnostic key created</h1><p>Copy this key now. It will not be shown again.</p><label for="diagnostic-key">Diagnostic key</label><input id="diagnostic-key" class="secret" readonly value="${escapeHtml(created.token)}"><p class="muted">Paste the same key into Agents, CPAP, Air Quality, and Hubitat.</p><p><a href="/diagnostics">Return to diagnostics</a></p>`);
       }
       if (request.method === 'POST' && url.pathname === '/logout') {
         requireOrigin(request);

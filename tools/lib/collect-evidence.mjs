@@ -329,6 +329,10 @@ export async function collectEvidence({
     'android/cpap-pkjs-pending.json', 'private-app-storage',
     'Release Core does not expose CPAP per-app PKJS localStorage through stock ADB.',
   ));
+  manifest.artifacts.push(unavailableArtifact(
+    'android/hubitat-pkjs-pending.json', 'private-app-storage',
+    'Release Core does not expose Hubitat per-app PKJS localStorage through stock ADB.',
+  ));
 
   let serial;
   let forwardedPort;

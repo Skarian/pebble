@@ -37,9 +37,14 @@ In Hubitat:
 
 This PBW already contains the token-free cloud API root supplied for this
 Hubitat Maker API app. In the Pebble mobile app, open Hubitat **Settings** and
-enter its only setting:
+enter the Maker API setting:
 
 - **Access token**: the token displayed by that same Maker API instance.
+
+The same page also has optional **Error reporting** controls. Reporting is off
+by default. When enabled, it uses the same shared write-only **Diagnostic key**
+as Agents, CPAP, and Air Quality. The key and server endpoint stay in the
+PebbleKit JS phone runtime; the watch receives only an enabled bit.
 
 Save Settings, return to the watch, and press **Select** to sync. Saving never
 starts a background read.
@@ -49,9 +54,15 @@ bridge is required. The access token lives in this app's private PebbleKit JS
 `localStorage` on the phone; PebbleKit JS does not expose the OS keychain. The
 phone also remembers which device IDs were returned by the latest successful
 refresh so it cannot control an arbitrary ID. The watch receives normalized
-device data, but never the Maker API URL or access token. Sanitized durable
-diagnostics retain only error type/status/message and never retain a URL,
-token, device ID, or device value.
+device data, but never the Maker API URL, access token, Diagnostic key, or
+server endpoint.
+
+When opted in, the watch and phone report source errors through the shared
+error system. Original exception, HTTP, protocol, persistence, and Pebble SDK
+details are retained; exact credentials, tokens, authorization/cookie values,
+transcripts, and message contents are redacted. Failures remain queued locally
+while the service is unavailable, and reporting cannot change Maker API or
+watch behavior. See [../../docs/error-reporting.md](../../docs/error-reporting.md).
 
 Maker API uses HTTP GET for reads and commands. This implementation reads
 `/devices/all` and invokes only the four-command allowlist above at
@@ -137,7 +148,9 @@ connected physical watch with the normal Pebble CLI workflow.
 | Watch device slots | persist keys `7310`–`7341` |
 | Phone settings | `hubitat.settings.v1` |
 | Phone authorized devices | `hubitat.authorized.v1` |
-| Phone diagnostics | `hubitat.diagnostics.v1` |
+| Phone error-reporting settings | `hubitat.errorReporting.v1` |
+| Phone error outbox | `pebble.errors.hubitat.v1` |
+| Watch error queue | 1 KiB at persist base `7400` (chunks `7401`–`7404`, enabled bit `7412`) |
 | Flash backup prefix | `emery.hubitat-qa-backup-*` |
 | QA output | `apps/hubitat/qa-results/all-screens-*-*/` |
 | Live cache | `apps/hubitat/data/qa-live-cache.json` |
@@ -145,9 +158,10 @@ connected physical watch with the normal Pebble CLI workflow.
 ## Project layout
 
 - `src/c/main.c` — bounded watch UI, last-good persistence, confirmation, and
-  AppMessage protocol.
-- `src/pkjs/index.js` — phone settings, direct Maker API reads, and controls.
-- `src/common/` — normalization, URL/client rules, and sanitized diagnostics.
+  the shared AppMessage/error boundary.
+- `src/pkjs/index.js` — phone settings, direct Maker API reads, controls, and
+  the shared AppMessage/error boundary.
+- `src/common/` — normalization plus Maker API URL/client and source-error rules.
 - `qa/` — external deterministic/live QA data and loopback bridge.
 - `scripts/qa-screenshots.mjs` — build, isolated emulator session, injection,
   capture, board assembly, and deterministic cleanup.

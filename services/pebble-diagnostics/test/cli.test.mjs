@@ -298,6 +298,7 @@ test('collector keeps sources independent and always removes its ADB forward', a
     assert.equal(result.manifest.artifacts.find(({path}) => path === 'android/target-dropbox.txt').status, 'failed');
     assert.equal(result.manifest.artifacts.find(({path}) => path === 'android/core-private-log.txt').status, 'unavailable');
     assert.equal(result.manifest.artifacts.find(({path}) => path === 'android/cpap-pkjs-pending.json').status, 'unavailable');
+    assert.equal(result.manifest.artifacts.find(({path}) => path === 'android/hubitat-pkjs-pending.json').status, 'unavailable');
     const coredump = result.manifest.artifacts.find(({path}) => path === 'watch/latest-coredump.core');
     assert.equal(coredump.status, 'collected');
     assert.equal(coredump.sideEffect, 'marked-read');

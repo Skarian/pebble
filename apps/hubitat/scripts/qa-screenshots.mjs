@@ -182,10 +182,12 @@ function encode(dictionary) {
   return result;
 }
 
-async function inject(session, scratch, messages, prefix) {
+async function inject(session, scratch, messages, prefix, buttons = []) {
   let index = 0;
   for (const message of messages) {
-    await session.capture(join(scratch, `${prefix}-${index++}.png`), [], encode(message));
+    await session.capture(join(scratch, `${prefix}-${index}.png`),
+      index === 0 ? buttons : [], encode(message));
+    index += 1;
   }
 }
 
@@ -232,18 +234,24 @@ export async function main() {
     restoreState = isolateEmulatorState();
     session = startCaptureSession();
     await session.ready;
+    let nextRequestId = 1;
 
     captured.push(await captureState(outputDir, session, 'loading-empty', 'SYNCING - NO CACHE'));
     captured.push(await captureState(outputDir, session, 'setup', 'SETUP REQUIRED', [],
-      statusMessage(1, 'Open Hubitat settings')));
-    await inject(session, scratch, snapshotMessages([], {partial: true}), 'empty');
+      statusMessage(1, 'Open Hubitat settings', nextRequestId++)));
+    await inject(session, scratch, snapshotMessages([], {
+      requestId: nextRequestId++, partial: true
+    }), 'empty', ['select']);
     captured.push(await captureState(outputDir, session, 'empty', 'NO AUTHORIZED DEVICES'));
 
     for (const item of matrix.errors) captured.push(await captureState(
-      outputDir, session, item.name, item.label, [], statusMessage(item.status, item.text)));
+      outputDir, session, item.name, item.label, ['select'],
+      statusMessage(item.status, item.text, nextRequestId++)));
 
     const fakeRawDevices = matrix.devices;
-    await inject(session, scratch, snapshotMessages(fakeRawDevices), 'full');
+    const fullMessages = snapshotMessages(fakeRawDevices, {requestId: nextRequestId++});
+    fullMessages.splice(2, 0, {...fullMessages[1]});
+    await inject(session, scratch, fullMessages, 'full', ['select']);
     const overview = await captureState(outputDir, session, 'overview', 'OVERVIEW');
     captured.push(overview);
     captured.push(await captureState(outputDir, session, 'motion', 'MOTION SENSOR', ['down']));
@@ -254,34 +262,40 @@ export async function main() {
     captured.push(await captureState(outputDir, session, 'lock-confirm', 'LOCK CONFIRMATION', ['select']));
     captured.push(await captureState(outputDir, session, 'command-pending', 'COMMAND PENDING', ['select']));
     captured.push(await captureState(outputDir, session, 'command-success', 'SUCCESS - DEVICE UPDATED', [],
-      commandResult(matrix.command.success.status, matrix.command.success.text, 2)));
+      commandResult(matrix.command.success.status, matrix.command.success.text, nextRequestId++)));
 
     await session.capture(join(scratch, 'next-command.png'), ['select', 'select']);
     captured.push(await captureState(outputDir, session, 'command-failure', 'FAILURE - SELECT RETRIES', [],
-      commandResult(matrix.command.failure.status, matrix.command.failure.text, 3)));
+      commandResult(matrix.command.failure.status, matrix.command.failure.text, nextRequestId++)));
 
     const missing = fakeRawDevices.map((device) => ({...device, attributes: {...device.attributes}}));
     missing[1].attributes = {battery: 67};
-    await inject(session, scratch, snapshotMessages(missing, {requestId: 3, partial: true}), 'missing');
+    await inject(session, scratch, snapshotMessages(missing, {
+      requestId: nextRequestId++, partial: true
+    }), 'missing', ['up', 'up', 'up', 'up', 'up', 'select']);
     captured.push(await captureState(outputDir, session, 'partial-overview', 'PARTIAL DATA'));
     captured.push(await captureState(outputDir, session, 'missing-value', 'MISSING DEVICE VALUE', ['down', 'down']));
 
     await inject(session, scratch, snapshotMessages(fakeRawDevices, {
-      requestId: 3, fetchedAt: Math.floor(Date.now() / 1000) - 2 * 86400
-    }), 'old-timestamp');
+      requestId: nextRequestId++, fetchedAt: Math.floor(Date.now() / 1000) - 2 * 86400
+    }), 'old-timestamp', ['up', 'up', 'select']);
     const oldTimestampPath = join(scratch, 'old-timestamp.png');
     await session.capture(oldTimestampPath);
     if (!readFileSync(oldTimestampPath).equals(readFileSync(overview.path))) {
       throw new Error('An old timestamp must render exactly like the normal overview');
     }
-    captured.push(await captureState(outputDir, session, 'cached-network', 'PHONE UNREACHABLE - CACHED', [],
-      statusMessage(3, 'Phone cannot reach Hubitat', 3)));
-    captured.push(await captureState(outputDir, session, 'cached-loading', 'SYNCING - CACHED', [],
-      statusMessage(6, '', 3)));
+    captured.push(await captureState(outputDir, session, 'cached-network',
+      'PHONE UNREACHABLE - CACHED', ['select'],
+      statusMessage(3, 'Phone cannot reach Hubitat', nextRequestId++)));
+    const cachedLoadingId = nextRequestId++;
+    captured.push(await captureState(outputDir, session, 'cached-loading',
+      'SYNCING - CACHED', ['select']));
 
     if (source === 'live') {
       liveInfo = await liveSnapshot({env, cachePath: join(ROOT, 'data/qa-live-cache.json')});
-      await inject(session, scratch, snapshotMessages(liveInfo.devices, {requestId: 3}), 'live');
+      await inject(session, scratch, snapshotMessages(liveInfo.devices, {
+        requestId: cachedLoadingId
+      }), 'live');
       captured.push(await captureState(outputDir, session, 'live', 'LIVE DATA'));
     }
 

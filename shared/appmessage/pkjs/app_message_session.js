@@ -270,23 +270,51 @@ function createAppMessageSession(options) {
   function deliverRead(read, reference) {
     var key = requestKey(reference);
     if (delivering[key]) return;
-    var dictionary = copyDictionary(read.response);
-    if (!dictionary) return;
-    dictionary[responseIdKey] = reference;
+    var source = Array.isArray(read.response) ? read.response : [read.response];
+    var dictionaries = [];
+    for (var index = 0; index < source.length; index += 1) {
+      var dictionary = copyDictionary(source[index]);
+      if (!dictionary) return;
+      dictionary[responseIdKey] = reference;
+      dictionaries.push(dictionary);
+    }
     delivering[key] = true;
-    send(dictionary, {operation: read.operation, requestId: reference}, function () {
+    send(dictionaries, {operation: read.operation, requestId: reference}, function () {
       delete delivering[key];
     });
   }
 
-  function finishRead(read, response) {
-    if (activeRead !== read) return;
-    activeRead = null; read.response = response; completedRead = read;
+  function normalizeReadResponse(response) {
+    var source = Array.isArray(response) ? response : [response];
+    if (!source.length) {
+      report(failure('AppMessageDictionaryError', 'AppMessage read response is empty',
+        {code: 'empty_read_response'}), 'running a phone read operation');
+      return null;
+    }
+    var normalized = [];
+    for (var index = 0; index < source.length; index += 1) {
+      var dictionary = copyDictionary(source[index]);
+      if (!dictionary) return null;
+      normalized.push(dictionary);
+    }
+    return Array.isArray(response) ? normalized : normalized[0];
+  }
+
+  function completeRead(read, response) {
+    activeRead = null;
+    read.response = response;
+    completedRead = read;
     read.order.forEach(function (key) { deliverRead(read, read.references[key]); });
   }
 
-  function domainFailure(read, configuration, error) {
-    report(error, 'running a phone read operation');
+  function finishRead(read, response) {
+    if (activeRead !== read) return;
+    var normalized = normalizeReadResponse(response);
+    if (normalized === null) { fallbackRead(read, read.configuration); return; }
+    completeRead(read, normalized);
+  }
+
+  function fallbackRead(read, configuration) {
     activeRead = null;
     var fallback = configuration.failureResponse;
     if (typeof fallback === 'function') {
@@ -297,9 +325,14 @@ function createAppMessageSession(options) {
       }
     }
     if (fallback !== undefined && fallback !== null) {
-      activeRead = read;
-      finishRead(read, fallback);
+      var normalized = normalizeReadResponse(fallback);
+      if (normalized !== null) completeRead(read, normalized);
     }
+  }
+
+  function domainFailure(read, configuration, error) {
+    report(error, 'running a phone read operation');
+    fallbackRead(read, configuration);
   }
 
   function protocolError(code, operation, reference) {
@@ -342,7 +375,7 @@ function createAppMessageSession(options) {
       return true;
     }
     var read = {operation: operation, signature: signature, firstReference: reference,
-      references: {}, order: []};
+      references: {}, order: [], configuration: configuration};
     read.references[key] = reference;
     read.order.push(key);
     activeRead = read;

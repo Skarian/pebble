@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {chooseDataSource, fakeRawDevices, liveSnapshot, snapshotMessages} from '../qa/qa-bridge.mjs';
+import {
+  chooseDataSource, commandResult, fakeRawDevices, liveSnapshot,
+  snapshotMessages, statusMessage,
+} from '../qa/qa-bridge.mjs';
 
 test('fake data is always the default and snapshots are terminally framed', () => {
   assert.equal(chooseDataSource({}), 'fake');
@@ -11,6 +14,9 @@ test('fake data is always the default and snapshots are terminally framed', () =
   assert.equal(messages[0].COMMAND, 3);
   assert.equal(messages.at(-1).COMMAND, 5);
   assert.ok(messages.slice(1, -1).every((message) => message.REQUEST_ID === 7));
+  assert.throws(() => snapshotMessages(fakeRawDevices), /nonzero uint16/);
+  assert.throws(() => statusMessage(2, 'bad', 0), /nonzero uint16/);
+  assert.throws(() => commandResult(9, 'bad', 65536), /nonzero uint16/);
 });
 
 test('snapshots cap oversized Maker API responses at 32 and mark them partial', () => {

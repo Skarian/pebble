@@ -37,3 +37,20 @@ test('generic safety sensors prefer their useful state over battery telemetry', 
     ['clear', 100], ['dry', 100]
   ]);
 });
+
+test('watch strings are projected to complete UTF-8 code points and IDs stay exact', () => {
+  const [device] = Model.normalizeDevices([{
+    id: '12345678901', label: 'Café 💡 in the downstairs hallway',
+    attributes: {switch: '🟢 enabled with a long status value', humidity: '45 percent'},
+    commands: ['on', 'off'],
+  }], []);
+
+  for (const value of [device.label, device.primary, device.secondary]) {
+    assert.ok(Buffer.byteLength(value, 'utf8') <= 24);
+    assert.doesNotMatch(value, /�/);
+  }
+  assert.equal(device.id, '12345678901');
+  assert.throws(() => Model.normalizeDevices([{
+    id: '123456789012', label: 'Too long', attributes: {},
+  }], []), (error) => error instanceof RangeError && error.deviceId === '123456789012');
+});
