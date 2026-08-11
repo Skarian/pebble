@@ -308,7 +308,7 @@ class AppMessageSession internal constructor(
                 }
                 if (transportResult == null) {
                     val timeout = AppMessageTransportTimeout(transportTimeoutMillis)
-                    errorReporter.report(timeout, whileDoing)
+                    errorReporter.report(mapOf("error" to timeout, "timeoutMillis" to transportTimeoutMillis), whileDoing)
                     Attempt.Failed(Failure.TIMEOUT, retryable = true)
                 } else {
                     if (transportResult != TransmissionResult.Success) {
@@ -319,7 +319,9 @@ class AppMessageSession internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: UnexpectedTransmissionResults) {
-                errorReporter.report(error, whileDoing)
+                errorReporter.report(mapOf(
+                    "error" to error, "resultCount" to error.resultCount, "results" to error.results,
+                ), whileDoing)
                 Attempt.Failed(Failure.WATCH_NOT_CONNECTED, retryable = true)
             } catch (error: Throwable) {
                 errorReporter.report(error, whileDoing)

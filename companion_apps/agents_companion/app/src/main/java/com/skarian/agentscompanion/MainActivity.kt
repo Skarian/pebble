@@ -90,7 +90,6 @@ class MainActivity : ComponentActivity() {
         pebbleJob = lifecycleScope.launch {
             val picker = DefaultPebbleAndroidAppPicker.getInstance(this@MainActivity)
             val selected = runCatching { picker.getCurrentlySelectedApp() }
-                .onFailure { errorReporter.report(it, "reading the selected Pebble provider") }
                 .getOrNull()
             DefaultPebbleInfoRetriever(this@MainActivity).getConnectedWatches()
                 .catch { error ->

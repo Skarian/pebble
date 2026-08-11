@@ -13,7 +13,7 @@ internal class ErrorUploadWorker(context: Context, parameters: WorkerParameters)
             .onFailure { Log.e("PebbleErrors", "Error reporter settings are unreadable", it) }
             .getOrNull()?.takeIf(Config::usable) ?: return Result.success()
         val journal = ErrorJournal(FileStore(File(applicationContext.noBackupFilesDir, ErrorReporter.FILE)))
-        val drained = runCatching { Uploader(journal, HttpsTransport(config.key), listOf(config.key)).drain() }
+        val drained = runCatching { Uploader(journal, HttpsTransport(config.key)).drain() }
             .getOrElse { error ->
                 Log.e("PebbleErrors", "Error upload worker failed", error)
                 return Result.retry()
@@ -31,18 +31,14 @@ internal sealed interface UploadResult {
     data class Failed(val error: Any, val transient: Boolean) : UploadResult
 }
 internal fun interface UploadTransport { fun send(record: JSONObject): UploadResult }
-internal class Uploader(private val journal: ErrorJournal, private val transport: UploadTransport,
-                        private val secrets: Collection<String> = emptyList()) {
+internal class Uploader(private val journal: ErrorJournal, private val transport: UploadTransport) {
     fun drain(): Drain {
         repeat(32) {
-            val record = journal.next(includePrivate = true) ?: return Drain.COMPLETE
+            val record = journal.next() ?: return Drain.COMPLETE
             when (val result = transport.send(record.copyPublic())) {
                 UploadResult.Accepted -> journal.acknowledge(record.getString("id"))
                 is UploadResult.Failed -> {
                     Log.e("PebbleErrors", "Error upload attempt failed", result.error as? Throwable)
-                    if (record.optString("_kind") != "upload") journal.add(Capture.internal(
-                        record.getString("source"), "uploading an error report", result.error, secrets,
-                    ))
                     return if (result.transient) Drain.TRANSIENT else Drain.PERMANENT
                 }
             }

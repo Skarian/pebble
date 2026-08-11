@@ -212,7 +212,7 @@ test('disable surfaces an outbox deletion failure instead of claiming it was cle
   assert.equal(durable.value('errors'), undefined);
 });
 
-test('dropped errors become one stable QueueOverflow record until explicitly ACKed', () => {
+test('lost errors become one stable QueueOverflow record until explicitly ACKed', () => {
   const requests = [];
   class FakeXhr {
     constructor() { this.headers = {}; requests.push(this); }
@@ -228,9 +228,10 @@ test('dropped errors become one stable QueueOverflow record until explicitly ACK
 
   clock.runNext();
   const first = JSON.parse(requests[0].body).records;
-  const overflow = first.filter((record) => record.error.name === 'QueueOverflow');
-  assert.equal(overflow.length, 1);
-  assert.equal(overflow[0].error.dropped, 6);
+  assert.equal(first.length, 20);
+  const overflow = first[0];
+  assert.equal(overflow.while, 'preserving queued errors');
+  assert.deepEqual(overflow.error, {name: 'QueueOverflow', dropped: 6});
   requests[0].status = 200;
   requests[0].responseText = JSON.stringify({accepted: []});
   requests[0].onload();
@@ -238,7 +239,7 @@ test('dropped errors become one stable QueueOverflow record until explicitly ACK
 
   assert.equal(clock.runNext().delay, 5000);
   const second = JSON.parse(requests[1].body).records;
-  assert.deepEqual(second[0], overflow[0]);
+  assert.deepEqual(second, first);
   requests[1].status = 200;
   requests[1].responseText = JSON.stringify({accepted: second.map((record) => record.id)});
   requests[1].onload();

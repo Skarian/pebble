@@ -328,7 +328,6 @@ static AppMessageClient *open_client(
 static AppMessageClient *open_client_with_errors(
     Harness *harness, AppMessageRequestIdCodec codec, ErrorReporter *errors) {
   AppMessageClientConfig config = {
-    .app_name = "test",
     .inbox_size = 256,
     .outbox_size = 128,
     .protocol = {
@@ -689,7 +688,8 @@ static void test_error_relay_is_durable_idempotent_and_business_first(void) {
   }), "testing lost import acknowledgement");
   assert(s_sent_count == 4);
   acknowledge(3);
-  fire_next_timer();
+  assert(next_timer() == NULL);
+  receive_ready();  // A reconnect retries the same durable record.
   assert(s_sent_count == 5);
   assert(dict_find(&s_sent[3], PEBBLE_ERROR_GENERATION_KEY)->value->uint32 ==
       dict_find(&s_sent[4], PEBBLE_ERROR_GENERATION_KEY)->value->uint32);
@@ -734,6 +734,54 @@ static void test_error_outbox_busy_never_consumes_a_business_attempt(void) {
   assert(s_sent_count == 4 && h.failures == 0);
   acknowledge(3);
   receive_id("business-busy", APP_MESSAGE_ID_CSTRING);
+  app_message_client_close(client);
+  error_reporter_destroy(errors);
+}
+
+static void test_lost_error_outbox_callback_retries_on_natural_events(void) {
+  reset_runtime();
+  reset_persistence();
+  ErrorReporter *errors = NEW_REPORTER();
+  error_reporter_set_enabled(errors, true);
+  Harness h = {0};
+  AppMessageClient *client = open_client_with_errors(
+      &h, APP_MESSAGE_ID_CSTRING, errors);
+  receive_ready();
+  s_enforce_single_outbox = true;
+
+  ERROR_REPORT(errors, ((ErrorValue){
+    .function = "lost_ready", .code = 31, .symbol = "LOST_CALLBACK",
+  }), "testing READY recovery");
+  assert(s_sent_count == 1 && next_timer() == NULL);
+  s_outbox_pending = false;  // Core completes without invoking the callback.
+  receive_ready();
+  assert(s_sent_count == 2);
+  assert(dict_find(&s_sent[0], PEBBLE_ERROR_GENERATION_KEY)->value->uint32 ==
+      dict_find(&s_sent[1], PEBBLE_ERROR_GENERATION_KEY)->value->uint32);
+  assert(dict_find(&s_sent[0], PEBBLE_ERROR_SEQUENCE_KEY)->value->uint32 ==
+      dict_find(&s_sent[1], PEBBLE_ERROR_SEQUENCE_KEY)->value->uint32);
+  acknowledge(1);
+  receive_error_ack(1);
+
+  ERROR_REPORT(errors, ((ErrorValue){
+    .function = "lost_error", .code = 37, .symbol = "LOST_CALLBACK",
+  }), "testing new-error recovery");
+  assert(s_sent_count == 3 && next_timer() == NULL);
+  s_outbox_pending = false;
+  ERROR_REPORT(errors, ((ErrorValue){
+    .function = "next_error", .code = 41, .symbol = "NEXT_ERROR",
+  }), "waking the relay naturally");
+  assert(s_sent_count == 4);
+  assert(dict_find(&s_sent[2], PEBBLE_ERROR_GENERATION_KEY)->value->uint32 ==
+      dict_find(&s_sent[3], PEBBLE_ERROR_GENERATION_KEY)->value->uint32);
+  assert(dict_find(&s_sent[2], PEBBLE_ERROR_SEQUENCE_KEY)->value->uint32 ==
+      dict_find(&s_sent[3], PEBBLE_ERROR_SEQUENCE_KEY)->value->uint32);
+  acknowledge(3);
+  receive_error_ack(3);
+  acknowledge(4);
+  receive_error_ack(4);
+  assert(!error_reporter_has_pending(errors));
+
   app_message_client_close(client);
   error_reporter_destroy(errors);
 }
@@ -891,6 +939,7 @@ int main(void) {
   test_outbox_timeout_preserves_unknown_delivery_across_retries();
   test_error_relay_is_durable_idempotent_and_business_first();
   test_error_outbox_busy_never_consumes_a_business_attempt();
+  test_lost_error_outbox_callback_retries_on_natural_events();
   test_error_buffer_survives_restart_counts_overflow_and_disables();
   test_odd_record_length_keeps_following_header_aligned();
   test_failed_disable_marker_falls_back_to_delete();

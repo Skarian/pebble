@@ -101,6 +101,21 @@ test('invalid and hostile bridge responses use controlled messages', () => {
   assert.equal(captured[1].error.headers, 'x-request-id: bridge-41');
 });
 
+test('a response metadata exception is captured once at the terminal boundary', () => {
+  const calls = [], captured = [];
+  const sourceError = new Error('native status getter failed');
+  invoke((xhr) => {
+    xhr.status = 200;
+    xhr.responseText = '{"ok":true}';
+    Object.defineProperty(xhr, 'statusText', {get() { throw sourceError; }});
+    xhr.onload();
+  }, (...args) => calls.push(args), null, (error) => captured.push(error));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0].message, 'Invalid bridge response');
+  assert.deepEqual(captured, [sourceError]);
+});
+
 test('synchronous bridge transport failures are reported and converted once', () => {
   const calls = [];
   const captured = [];

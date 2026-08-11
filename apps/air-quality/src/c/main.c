@@ -634,7 +634,6 @@ static void init(void) {
       (WindowHandlers){.load = window_load, .unload = window_unload});
   window_set_click_config_provider(s_window, click_config);
   AppMessageClientConfig phone_config = {
-    .app_name = "air-quality",
     .inbox_size = 2048,
     .outbox_size = PEBBLE_ERROR_OUTBOX_BYTES,
     .protocol = {

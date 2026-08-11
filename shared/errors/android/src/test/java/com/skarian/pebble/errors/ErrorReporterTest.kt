@@ -49,7 +49,7 @@ class ErrorReporterTest {
         val policies = mutableListOf<ExistingWorkPolicy>()
 
         AndroidErrorReporter(
-            "agents/android@test", MemorySettings(Config(true, "key")),
+            "agents/android@test", MemorySettings(Config("key")),
             ErrorJournal(enabledStore), { emptyList() }, { policies += it }, {},
         )
         val disabledStore = MemoryStore().apply { value = enabledStore.value }
@@ -66,7 +66,7 @@ class ErrorReporterTest {
     fun `broken settings cannot escape through the optional reporter`() {
         val store = MemoryStore()
         val reporter = AndroidErrorReporter(
-            "agents/android@test", MemorySettings(Config(true, "key"), failReads = true),
+            "agents/android@test", MemorySettings(Config("key"), failReads = true),
             ErrorJournal(store), { emptyList() }, { _ -> error("scheduled") }, {},
         )
 
@@ -89,13 +89,15 @@ class ErrorReporterTest {
             IOException("authorization Bearer access-123; token=generic-message-token and nearby text"),
         ).also { it.addSuppressed(IllegalArgumentException("secondary")) }
         val record = Capture.error(
-            "agents/android@test", "calling the router", error,
+            "agents/android@test", "calling the router", mapOf(
+                "error" to error, "status" to error.status, "response" to error.response,
+            ),
             listOf("access-123", "refresh-456", "user-secret", "xy"),
         ).single()
         val captured = record.getJSONObject("error")
         val encoded = captured.toString()
 
-        assertEquals(SourceFailure::class.java.name, captured.getString("name"))
+        assertEquals(SourceFailure::class.java.name, captured.getJSONObject("error").getString("name"))
         assertTrue(encoded.contains("503"))
         assertTrue(encoded.contains("temporarily_unavailable"))
         assertTrue(encoded.contains("nearby text"))
@@ -112,12 +114,12 @@ class ErrorReporterTest {
         assertFalse(encoded.contains("generic-credential"))
         assertFalse(encoded.contains("generic-secret"))
         assertFalse(encoded.contains("generic-message-token"))
-        assertTrue(captured.getString("stack").contains("ErrorReporterTest"))
+        assertTrue(captured.getJSONObject("error").getString("stack").contains("ErrorReporterTest"))
     }
 
     @Test
     fun `opting out clears configuration queue and cancels upload`() {
-        val settings = MemorySettings(Config(true, "private-key"))
+        val settings = MemorySettings(Config("private-key"))
         val store = MemoryStore()
         val journal = ErrorJournal(store)
         journal.add(listOf(record("queued")))
@@ -139,7 +141,7 @@ class ErrorReporterTest {
     fun `report snapshots and persists mutable evidence before returning`() {
         val journal = ErrorJournal(MemoryStore())
         val reporter = AndroidErrorReporter(
-            "agents/android@test", MemorySettings(Config(true, "key")),
+            "agents/android@test", MemorySettings(Config("key")),
             journal, { emptyList() }, { _ -> }, {},
         )
         val evidence = mutableMapOf("detail" to "before")
@@ -154,23 +156,18 @@ class ErrorReporterTest {
 
     @Test
     fun `failed opt out still cancels work and clears queued errors`() {
-        val settings = MemorySettings(Config(true, "key"), failWrites = 1)
+        val settings = MemorySettings(Config("key"), failWrites = 1)
         val journal = ErrorJournal(MemoryStore()).also { it.add(listOf(record("queued"))) }
-        val runtime = ReporterState()
         var cancelled = 0
-        fun reporter(state: ReporterState) = AndroidErrorReporter(
-            "agents/android@test", settings, journal, { emptyList() }, { _ -> }, { cancelled++ }, state,
+        val current = AndroidErrorReporter(
+            "agents/android@test", settings, journal, { emptyList() }, { _ -> }, { cancelled++ },
         )
-        val current = reporter(runtime)
 
         assertThrows(IOException::class.java) { current.configure(false) }
 
         assertFalse(current.enabled)
-        assertFalse(reporter(runtime).enabled)
         assertEquals(0, current.status().queued)
         assertEquals(1, cancelled)
-        assertTrue(reporter(ReporterState()).enabled)
-        assertEquals(0, reporter(ReporterState()).status().queued)
     }
 
     @Test
@@ -180,7 +177,7 @@ class ErrorReporterTest {
         val disabled = CountDownLatch(1)
         val journal = ErrorJournal(MemoryStore())
         val reporter = AndroidErrorReporter(
-            "agents/android@test", MemorySettings(Config(true, "key")),
+            "agents/android@test", MemorySettings(Config("key")),
             journal, { enteredCapture.countDown(); releaseCapture.await(); emptyList() }, { _ -> }, {},
         )
         val reporting = thread { reporter.report(IllegalStateException("failure"), "testing race") }
@@ -196,7 +193,7 @@ class ErrorReporterTest {
 
     @Test
     fun `background capture keeps work while rekey and manual send replace it`() {
-        val settings = MemorySettings(Config(true, "old-key"))
+        val settings = MemorySettings(Config("old-key"))
         val journal = ErrorJournal(MemoryStore()).also { it.add(listOf(record("queued"))) }
         val policies = mutableListOf<ExistingWorkPolicy>()
         val reporter = AndroidErrorReporter(
@@ -218,24 +215,6 @@ class ErrorReporterTest {
     }
 
     @Test
-    fun `redaction failure holds source locally and adds one safe error`() {
-        val records = Capture.error(
-            "agents/android@test", "processing a result",
-            IllegalStateException("private-source-value"), emptyList(),
-            redactor = { _, _ -> error("redactor broke") },
-        )
-        val journal = ErrorJournal(MemoryStore())
-        journal.add(records)
-
-        assertEquals(2, records.size)
-        assertTrue(records.first().optBoolean("_held"))
-        assertTrue(records.first().toString().contains("private-source-value"))
-        assertFalse(records.last().toString().contains("private-source-value"))
-        assertEquals(1, journal.status().held)
-        assertEquals("ErrorRedactionFailure", requireNotNull(journal.next()).getJSONObject("error").getString("name"))
-    }
-
-    @Test
     fun `upload retry preserves original identity and order`() {
         val journal = ErrorJournal(MemoryStore())
         val first = record("one")
@@ -253,37 +232,26 @@ class ErrorReporterTest {
         assertEquals(Drain.COMPLETE, Uploader(journal, transport).drain())
 
         assertEquals(listOf("one", "one", "two"), attempted.take(3))
-        assertEquals(0, journal.status().queued)
+        assertEquals(0, journal.size())
     }
 
     @Test
-    fun `upload health keeps one identity across repeated failure and lost ACK`() {
+    fun `upload failure never creates recursive reporter records`() {
         val journal = ErrorJournal(MemoryStore()).also { it.add(listOf(record("source"))) }
         var sourceAttempts = 0
-        val acceptedHealthIds = mutableListOf<String>()
         val transport = UploadTransport { value ->
             assertFalse(value.has("_kind"))
-            if (value.getJSONObject("error").getString("name") == "TestError") {
-                sourceAttempts++
-                if (sourceAttempts <= 2) UploadResult.Failed(IOException("offline"), true)
-                else UploadResult.Accepted
-            } else {
-                acceptedHealthIds += value.getString("id")
-                if (acceptedHealthIds.size == 1) UploadResult.Failed(IOException("accepted but ACK lost"), true)
-                else UploadResult.Accepted
-            }
+            sourceAttempts++
+            if (sourceAttempts <= 2) UploadResult.Failed(IOException("offline"), true)
+            else UploadResult.Accepted
         }
 
         assertEquals(Drain.TRANSIENT, Uploader(journal, transport).drain())
-        assertEquals(2, journal.status().queued)
+        assertEquals(1, journal.size())
         assertEquals(Drain.TRANSIENT, Uploader(journal, transport).drain())
-        assertEquals(2, journal.status().queued)
-        assertEquals(Drain.TRANSIENT, Uploader(journal, transport).drain())
+        assertEquals(1, journal.size())
         assertEquals(Drain.COMPLETE, Uploader(journal, transport).drain())
-
-        assertEquals(2, acceptedHealthIds.size)
-        assertEquals(1, acceptedHealthIds.distinct().size)
-        assertEquals(0, journal.status().queued)
+        assertEquals(0, journal.size())
     }
 
     @Test
@@ -300,7 +268,7 @@ class ErrorReporterTest {
         assertEquals(2L, overflow.getJSONObject("error").getLong("dropped"))
         assertEquals(overflow.getString("id"), requireNotNull(journal.next()).getString("id"))
         journal.acknowledge(overflow.getString("id"))
-        assertEquals(0, journal.status().queued)
+        assertEquals(0, journal.size())
     }
 
     @Test
@@ -310,28 +278,13 @@ class ErrorReporterTest {
 
         journal.add(listOf(record("source")))
 
-        val recovery = requireNotNull(journal.next(includePrivate = true))
-        assertEquals("ErrorJournalRecovery", recovery.getJSONObject("error").getString("name"))
-        assertEquals("journal", recovery.getString("_kind"))
-        journal.acknowledge(recovery.getString("id"))
         assertEquals("source", requireNotNull(journal.next()).getString("id"))
-        assertEquals(1, journal.status().queued)
-    }
-
-    @Test
-    fun `HTTP upload error retains the bounded original response body`() {
-        val error = HttpUploadError(401, "https://pebble.exe.xyz", "{\"error\":\"invalid key\"}")
-        val captured = Capture.error(
-            "agents/android@test", "uploading an error report", error, emptyList(),
-        ).single().getJSONObject("error").toString()
-
-        assertTrue(captured.contains("invalid key"))
-        assertTrue(captured.contains("401"))
+        assertEquals(1, journal.size())
     }
 
     @Test
     fun `failed queue deletion cannot revive stale errors after re-enable`() {
-        val settings = MemorySettings(Config(true, "key"))
+        val settings = MemorySettings(Config("key"))
         val store = MemoryStore()
         val journal = ErrorJournal(store).also { it.add(listOf(record("stale"))) }
         val reporter = AndroidErrorReporter(
@@ -408,7 +361,7 @@ class ErrorReporterTest {
             ))
         }
 
-        assertEquals(2, journal.status().queued)
+        assertEquals(2, journal.size())
         val value = requireNotNull(journal.next())
         val error = value.getJSONObject("error")
         assertEquals("watch:agents/watch@test:41:9", value.getString("id"))

@@ -33,7 +33,7 @@ class RouterRunService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { if (intent?.action == ACTION_START) startRun(intent); return START_NOT_STICKY }
     override fun onCreate() { super.onCreate(); CompanionNotifications.createChannel(this) }
-    override fun onDestroy() { heartbeatHandler.removeCallbacks(heartbeat); runCatching { server?.close() }.onFailure { agentsErrorReporter(this).report(it, "closing the router event socket") }; executor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { heartbeatHandler.removeCallbacks(heartbeat); runCatching { server?.close() }; executor.shutdownNow(); super.onDestroy() }
 
     private fun startRun(intent: Intent) {
         startForeground(CompanionNotifications.ACTIVE_NOTIFICATION_ID, CompanionNotifications.active(this, "Starting agent turn…"))

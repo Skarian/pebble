@@ -99,7 +99,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         }
         return if (admission.status == AppMessageSession.ReadStatus.CONFLICT) {
             reporter.report(
-                AirQualityRequestError(
+                airQualityRequestError(
                     "Air Quality request identity conflicts with the active request.",
                     request.requestId, request.command, request.scale.name, data.keys.map(UInt::toLong),
                 ),
@@ -290,7 +290,7 @@ class AirQualityPebbleService : BasePebbleListenerService() {
         message: String,
     ): ReceiveResult {
         reporter.report(
-            AirQualityRequestError(
+            airQualityRequestError(
                 message,
                 PebbleProtocol.number(data, PebbleProtocol.REQUEST_ID),
                 PebbleProtocol.number(data, PebbleProtocol.COMMAND),
@@ -315,13 +315,16 @@ class AirQualityPebbleService : BasePebbleListenerService() {
     }
 }
 
-internal class AirQualityRequestError(
+internal fun airQualityRequestError(
     message: String,
-    val requestId: Int?,
-    val command: Int?,
-    val scale: String?,
-    val keys: List<Long>,
-) : IllegalArgumentException(message)
+    requestId: Int?,
+    command: Int?,
+    scale: String?,
+    keys: List<Long>,
+) = linkedMapOf<String, Any?>(
+    "name" to "AirQualityRequestError", "message" to message, "requestId" to requestId,
+    "command" to command, "scale" to scale, "keys" to keys,
+)
 
 internal fun airErrorReporter(context: android.content.Context): ErrorReporter = ErrorReporter.create(
     context.applicationContext,

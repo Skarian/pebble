@@ -107,7 +107,6 @@ typedef struct {
 } AppMessageProtocol;
 
 typedef struct {
-  const char *app_name;
   uint32_t inbox_size;
   uint32_t outbox_size;
   AppMessageProtocol protocol;

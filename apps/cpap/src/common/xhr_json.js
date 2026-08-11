@@ -17,11 +17,9 @@ function diagnosticBody(url, text) {
   text = String(text || '');
   if (!/\/scores(?:[/?#]|$)/.test(url)) return text;
   try {
-    var payload = JSON.parse(text || '{}'), envelope = {};
-    Object.keys(payload).forEach(function (key) {
-      if (key !== 'records' && key !== 'data') envelope[key] = payload[key];
-    });
-    return JSON.stringify(envelope);
+    var payload = JSON.parse(text || '{}');
+    delete payload.records; delete payload.data;
+    return JSON.stringify(payload);
   } catch (ignored) { return '[unparseable score response; bytes=' + text.length + ']'; }
 }
 
@@ -53,16 +51,10 @@ function createXhrJson(Xhr, options) {
     }
 
     function responseFields() {
-      var headers = '', statusText = '';
-      try {
-        if (typeof xhr.getAllResponseHeaders === 'function') {
-          headers = String(xhr.getAllResponseHeaders() || '').slice(0, 8192);
-        }
-      } catch (error) { report(error, 'reading the CPAP bridge response headers', secrets); }
-      try { statusText = String(xhr.statusText || ''); }
-      catch (error) { report(error, 'reading the CPAP bridge response status', secrets); }
-      return {status: Number(xhr.status || 0), statusText: statusText,
-        headers: headers, body: diagnosticBody(url, xhr.responseText)};
+      return {status: Number(xhr.status || 0), statusText: String(xhr.statusText || ''),
+        headers: typeof xhr.getAllResponseHeaders === 'function' ?
+          String(xhr.getAllResponseHeaders() || '').slice(0, 8192) : '',
+        body: diagnosticBody(url, xhr.responseText)};
     }
 
     try {
@@ -82,18 +74,17 @@ function createXhrJson(Xhr, options) {
 
     xhr.onload = function () {
       if (completed) return;
-      var parsed;
-      try { parsed = JSON.parse(xhr.responseText || '{}'); }
+      var parsed, fields;
+      try { fields = responseFields(); parsed = JSON.parse(xhr.responseText || '{}'); }
       catch (error) {
-        fail(error, {type: 'service', message: 'Invalid bridge response'}, responseFields());
+        fail(error, {type: 'service', message: 'Invalid bridge response'}, fields);
         return;
       }
-      if (xhr.status >= 200 && xhr.status < 300) { finish(null, parsed); return; }
-      var type = xhr.status === 401 ? 'auth' : 'service';
-      var error = new Error('Bridge returned HTTP ' + Number(xhr.status || 0));
+      if (fields.status >= 200 && fields.status < 300) { finish(null, parsed); return; }
+      var type = fields.status === 401 ? 'auth' : 'service';
+      var error = new Error('Bridge returned HTTP ' + fields.status);
       error.name = 'BridgeHttpError';
-      fail(error, {type: type, message: publicBridgeMessage(xhr.status, parsed.code)},
-        responseFields());
+      fail(error, {type: type, message: publicBridgeMessage(fields.status, parsed.code)}, fields);
     };
     xhr.onerror = function () {
       fail(new Error('The bridge request failed'),
@@ -103,12 +94,10 @@ function createXhrJson(Xhr, options) {
       fail(new Error('The bridge request timed out'),
         {type: 'network', message: 'Bridge timed out'}, {event: 'timeout'});
     };
-    xhr.onloadend = function () {
-      if (!completed && (!xhr.status || xhr.status === 0)) {
-        fail(new Error('The bridge closed without a response'),
-          {type: 'network', message: 'Phone or bridge offline'}, {event: 'loadend'});
-      }
-    };
+    xhr.onloadend = function () { if (!completed && (!xhr.status || xhr.status === 0)) {
+      fail(new Error('The bridge closed without a response'),
+        {type: 'network', message: 'Phone or bridge offline'}, {event: 'loadend'});
+    } };
 
     var serialized = null;
     try { if (body !== null) serialized = JSON.stringify(body); }

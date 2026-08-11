@@ -940,7 +940,6 @@ static void init(void) {
   s_loading = refresh_on_launch;
 
   AppMessageClientConfig phone_config = {
-    .app_name = "cpap",
     .inbox_size = 1024,
     .outbox_size = PEBBLE_ERROR_OUTBOX_BYTES,
     .protocol = {

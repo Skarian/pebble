@@ -1555,7 +1555,6 @@ static void init(void) {
   load_agents();
   load_turn();
   AppMessageClientConfig phone_config = {
-    .app_name = "agents",
     .inbox_size = 2048,
     .outbox_size = 1024,
     .protocol = {

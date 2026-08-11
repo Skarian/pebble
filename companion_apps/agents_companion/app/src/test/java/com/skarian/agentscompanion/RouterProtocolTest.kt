@@ -232,12 +232,12 @@ class RouterProtocolTest {
         parseAgentRefresh(failed, reported::add)
 
         assertTrue(reported[0] is org.json.JSONException)
-        val execution = reported[1] as TermuxExecutionError
-        assertEquals(17, execution.exitCode)
-        assertEquals(4, execution.errorCode)
-        assertEquals(TermuxCommandRunner.KIND_AGENTS, execution.kind)
-        assertEquals("", execution.standardOutput)
-        assertEquals("socket failed", execution.standardError)
+        val execution = reported[1] as Map<*, *>
+        assertEquals(17, execution["exitCode"])
+        assertEquals(4, execution["errorCode"])
+        assertEquals(TermuxCommandRunner.KIND_AGENTS, execution["kind"])
+        assertEquals("", execution["standardOutput"])
+        assertEquals("socket failed", execution["standardError"])
     }
 
     @Test(expected = IllegalArgumentException::class)

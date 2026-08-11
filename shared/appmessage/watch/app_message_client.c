@@ -10,13 +10,12 @@
 #define RETRY_BACKOFF_MS 400
 #define MAX_PRIMARY_ATTEMPTS 3
 #define MAX_RECONCILE_ATTEMPTS 2
-#define ERROR_MAX_ATTEMPTS 3
 #define MAX_BUSY_RETRIES 3
 
 typedef enum {
   ERROR_IDLE = 0,
   ERROR_OUTBOX,
-  ERROR_WAITING,
+  ERROR_WAITING_ACK,
 } ErrorSendState;
 
 struct AppMessageClient {
@@ -34,7 +33,6 @@ struct AppMessageClient {
   bool acknowledged;
   bool delivery_unknown;
   ErrorSendState error_state;
-  uint8_t error_attempts;
   uint8_t busy_retries;
   char request_id[APP_MESSAGE_CLIENT_ID_CAPACITY];
 };
@@ -47,10 +45,6 @@ static void send_attempt(AppMessageClient *client);
 static void fail_request(
     AppMessageClient *client, AppMessageClientFailure failure,
     AppMessageResult result);
-
-static const char *app_name(const AppMessageClient *client) {
-  return client->config.app_name ? client->config.app_name : "watchapp";
-}
 
 static void cancel_timer(AppMessageClient *client) {
   if (!client->timer) return;
@@ -100,11 +94,6 @@ static void report_app_message(
 
 static void notify_state(AppMessageClient *client, AppMessageClientState state) {
   client->status.state = state;
-  APP_LOG(APP_LOG_LEVEL_DEBUG,
-          "appmessage event=state app=%s op=%u id=%.16s ready=%u state=%u primary=%u reconcile=%u ack=%u",
-          app_name(client), client->status.operation, client->request_id,
-          client->phone_ready, state, client->primary_attempts,
-          client->reconcile_attempts, client->acknowledged);
   if (client->config.state_changed) {
     client->config.state_changed(&client->status, client->config.context);
   }
@@ -114,18 +103,12 @@ static bool arm_timer(AppMessageClient *client, uint32_t delay_ms) {
   cancel_timer(client);
   client->timer = app_timer_register(delay_ms ? delay_ms : 1, timer_fired, client);
   if (client->timer) return true;
-  if (client->error_state != ERROR_IDLE) {
-    client->error_state = ERROR_IDLE;
-    APP_LOG(APP_LOG_LEVEL_ERROR,
-        "pebble-errors reporter=app_timer_register failed=1");
-  } else {
-    report_source(client, (ErrorValue){
-      .function = "app_timer_register", .code = 0,
-      .symbol = "NULL_RETURN",
-    }, "scheduling AppMessage timeout");
-    if (client->active) {
-      fail_request(client, APP_MESSAGE_FAILURE_DELIVERY, APP_MSG_OUT_OF_MEMORY);
-    }
+  report_source(client, (ErrorValue){
+    .function = "app_timer_register", .code = 0,
+    .symbol = "NULL_RETURN",
+  }, "scheduling AppMessage timeout");
+  if (client->active) {
+    fail_request(client, APP_MESSAGE_FAILURE_DELIVERY, APP_MSG_OUT_OF_MEMORY);
   }
   return false;
 }
@@ -141,10 +124,7 @@ static uint8_t max_attempts(const AppMessageClient *client) {
 }
 
 static void reset_request(AppMessageClient *client) {
-  bool diagnostic_inflight = client->active &&
-      client->error_state == ERROR_OUTBOX &&
-      client->status.state == APP_MESSAGE_CLIENT_BACKING_OFF;
-  if (!diagnostic_inflight) cancel_timer(client);
+  cancel_timer(client);
   client->active = false;
   client->busy_retries = 0;
   client->attempt_token = 0;
@@ -157,6 +137,9 @@ static void reset_request(AppMessageClient *client) {
   client->delivery_unknown = false;
   client->request_id[0] = '\0';
   notify_state(client, APP_MESSAGE_CLIENT_IDLE);
+  if (client->error_state == ERROR_WAITING_ACK) {
+    client->error_state = ERROR_IDLE;
+  }
   try_send_error(client);
 }
 
@@ -166,10 +149,6 @@ static void fail_request(
     AppMessageResult result) {
   cancel_timer(client);
   notify_state(client, APP_MESSAGE_CLIENT_FAILED);
-  APP_LOG(APP_LOG_LEVEL_ERROR,
-          "appmessage event=terminal_failure app=%s op=%u id=%.16s failure=%u result=%d ack=%u",
-          app_name(client), client->status.operation, client->request_id,
-          failure, result, client->acknowledged);
   if (client->config.request_failed) {
     AppMessageFailureInfo info = {
       .failure = failure,
@@ -351,10 +330,6 @@ static void send_attempt(AppMessageClient *client) {
       ? &client->reconcile_attempts : &client->primary_attempts;
   client->attempt_token++;
   if (!client->attempt_token) client->attempt_token++;
-  APP_LOG(APP_LOG_LEVEL_INFO,
-          "appmessage event=send_attempt app=%s op=%u kind=%u id=%.16s attempt=%u",
-          app_name(client), client->status.operation, client->status.send_kind,
-          client->request_id, (unsigned)(*count + 1));
   AppMessageResult result = send_dictionary(client);
   // BUSY means this logical attempt never entered the outbox. It can happen
   // when a timed-out diagnostic callback is merely late, so retry it without
@@ -371,13 +346,13 @@ static void send_attempt(AppMessageClient *client) {
   client->busy_retries = 0;
   (*count)++;
   if (result == APP_MSG_OK) {
+    if (client->error_state == ERROR_OUTBOX) {
+      client->error_state = ERROR_IDLE;
+    }
     notify_state(client, APP_MESSAGE_CLIENT_WAITING_OUTBOX);
     arm_timer(client, OUTBOX_TIMEOUT_MS);
     return;
   }
-  APP_LOG(APP_LOG_LEVEL_WARNING,
-          "appmessage event=send_rejected app=%s op=%u id=%.16s result=%d",
-          app_name(client), client->status.operation, client->request_id, result);
   retry_or_fail(client, APP_MESSAGE_FAILURE_DELIVERY, result);
 }
 
@@ -392,10 +367,6 @@ static void start_reconcile(AppMessageClient *client) {
 }
 
 static void response_timed_out(AppMessageClient *client) {
-  APP_LOG(APP_LOG_LEVEL_WARNING,
-          "appmessage event=response_timeout app=%s op=%u kind=%u id=%.16s",
-          app_name(client), client->status.operation, client->status.send_kind,
-          client->request_id);
   report_app_message(
       client, "waiting for phone response", APP_MSG_SEND_TIMEOUT,
       client->status.send_kind == APP_MESSAGE_SEND_RECONCILE
@@ -423,17 +394,6 @@ static void response_timed_out(AppMessageClient *client) {
 static void timer_fired(void *context) {
   AppMessageClient *client = context;
   client->timer = NULL;
-  if (client->error_state != ERROR_IDLE) {
-    client->error_state = ERROR_IDLE;
-    if (client->active) {
-      send_attempt(client);
-    } else if (client->error_attempts < ERROR_MAX_ATTEMPTS) {
-      try_send_error(client);
-    } else {
-      client->error_attempts = 0;
-    }
-    return;
-  }
   if (!client->active) return;
   switch (client->status.state) {
     case APP_MESSAGE_CLIENT_WAITING_READY:
@@ -441,9 +401,6 @@ static void timer_fired(void *context) {
       send_attempt(client);
       break;
     case APP_MESSAGE_CLIENT_WAITING_OUTBOX:
-      APP_LOG(APP_LOG_LEVEL_WARNING,
-              "appmessage event=outbox_timeout app=%s op=%u id=%.16s",
-              app_name(client), client->status.operation, client->request_id);
       report_app_message(
           client, "app_message_outbox_send callback", APP_MSG_SEND_TIMEOUT,
           "waiting for AppMessage outbox acknowledgement");
@@ -490,12 +447,12 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
       if (!reporting_enabled && client->error_state != ERROR_IDLE) {
         cancel_timer(client);
         client->error_state = ERROR_IDLE;
-        client->error_attempts = 0;
         if (client->active) send_attempt(client);
       }
     }
-    APP_LOG(APP_LOG_LEVEL_INFO,
-            "appmessage event=ready app=%s ready=1", app_name(client));
+    if (client->error_state != ERROR_IDLE) {
+      client->error_state = ERROR_IDLE;
+    }
     if (client->active && client->status.state == APP_MESSAGE_CLIENT_WAITING_READY) {
       send_attempt(client);
     } else {
@@ -508,9 +465,8 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
         error_reporter_accept_ack(client->config.errors, iterator)) {
       bool business_waiting = client->active &&
           client->error_state != ERROR_IDLE;
-      if (client->error_state != ERROR_IDLE) cancel_timer(client);
+      if (business_waiting) cancel_timer(client);
       client->error_state = ERROR_IDLE;
-      client->error_attempts = 0;
       if (business_waiting) send_attempt(client);
       else if (!client->active) try_send_error(client);
     }
@@ -526,9 +482,6 @@ static void inbox_received(DictionaryIterator *iterator, void *context) {
     return;
   }
   if (!client->active || strcmp(response_id, client->request_id) != 0) {
-    APP_LOG(APP_LOG_LEVEL_WARNING,
-            "appmessage event=stale_response app=%s op=%u id=%.16s",
-            app_name(client), client->status.operation, response_id);
     if (client->config.errors) {
       ERROR_REPORT(client->config.errors, ((ErrorValue){
         .function = "inbox_received", .code = 0,
@@ -559,22 +512,9 @@ static void inbox_dropped(AppMessageResult reason, void *context) {
   (void)context;
   AppMessageClient *client = s_open_client;
   if (!client || !client->opened) return;
-  APP_LOG(APP_LOG_LEVEL_WARNING,
-          "appmessage event=inbox_dropped app=%s op=%u id=%.16s result=%d",
-          app_name(client), client->status.operation, client->request_id, reason);
   if (client->error_state == ERROR_IDLE) {
     report_app_message(
         client, "app_message inbox", reason, "receiving AppMessage from phone");
-  }
-}
-
-static void retry_error(AppMessageClient *client) {
-  client->error_state = ERROR_IDLE;
-  if (client->error_attempts < ERROR_MAX_ATTEMPTS) {
-    client->error_state = ERROR_WAITING;
-    arm_timer(client, RETRY_BACKOFF_MS * client->error_attempts);
-  } else {
-    client->error_attempts = 0;
   }
 }
 
@@ -583,16 +523,12 @@ static bool handle_error_outbox(
   if (!client || !client->opened ||
       !tuple_is_command(iterator, PEBBLE_ERROR_COMMAND_IMPORT)) return false;
   if (client->error_state == ERROR_OUTBOX) {
-    cancel_timer(client);
-    client->error_state = ERROR_IDLE;
-    if (client->active) {
-      client->error_attempts = 0;
+    client->error_state = sent ? ERROR_WAITING_ACK : ERROR_IDLE;
+    if (client->active &&
+        client->status.state == APP_MESSAGE_CLIENT_BACKING_OFF) {
+      cancel_timer(client);
+      client->busy_retries = 0;
       send_attempt(client);
-    } else if (sent) {
-      client->error_state = ERROR_WAITING;
-      arm_timer(client, OUTBOX_TIMEOUT_MS);
-    } else {
-      retry_error(client);
     }
   } else if (client->active && client->busy_retries &&
       client->status.state == APP_MESSAGE_CLIENT_BACKING_OFF) {
@@ -632,9 +568,6 @@ static void outbox_failed(
   AppMessageClient *client = s_open_client;
   if (handle_error_outbox(client, iterator, false)) return;
   if (!client || !client->opened || !callback_matches(client, iterator)) {
-    APP_LOG(APP_LOG_LEVEL_WARNING,
-            "appmessage event=stale_outbox_failure app=%s result=%d",
-            client ? app_name(client) : "watchapp", reason);
     if (client && client->opened) {
       report_app_message(client, "app_message_outbox_send callback", reason,
           "handling late AppMessage failure");
@@ -642,9 +575,6 @@ static void outbox_failed(
     return;
   }
   cancel_timer(client);
-  APP_LOG(APP_LOG_LEVEL_WARNING,
-          "appmessage event=outbox_failed app=%s op=%u id=%.16s result=%d",
-          app_name(client), client->status.operation, client->request_id, reason);
   report_app_message(
       client, "app_message_outbox_send callback", reason,
       "sending AppMessage to phone");
@@ -656,7 +586,6 @@ static void try_send_error(AppMessageClient *client) {
       client->error_state != ERROR_IDLE ||
       !client->config.errors ||
       !error_reporter_has_pending(client->config.errors)) return;
-  client->error_attempts++;
   DictionaryIterator *iterator;
   AppMessageResult result = app_message_outbox_begin(&iterator);
   if (result == APP_MSG_OK &&
@@ -667,14 +596,15 @@ static void try_send_error(AppMessageClient *client) {
   }
   if (result == APP_MSG_OK) {
     client->error_state = ERROR_OUTBOX;
-    arm_timer(client, OUTBOX_TIMEOUT_MS);
-    return;
   }
-  retry_error(client);
 }
 
 static void error_available(void *context) {
-  try_send_error(context);
+  AppMessageClient *client = context;
+  if (client && client->error_state != ERROR_IDLE) {
+    client->error_state = ERROR_IDLE;
+  }
+  try_send_error(client);
 }
 
 AppMessageClient *app_message_client_open(
@@ -705,9 +635,6 @@ AppMessageClient *app_message_client_open(
   AppMessageResult result = app_message_open(
       client->config.inbox_size, client->config.outbox_size);
   if (result != APP_MSG_OK) {
-    APP_LOG(APP_LOG_LEVEL_ERROR,
-            "appmessage event=open_failed app=%s result=%d",
-            app_name(client), result);
     report_app_message(
         client, "app_message_open", result, "opening AppMessage channel");
     error_reporter_attach(client->config.errors, NULL, NULL);
@@ -718,7 +645,6 @@ AppMessageClient *app_message_client_open(
     return NULL;
   }
   client->opened = true;
-  APP_LOG(APP_LOG_LEVEL_INFO, "appmessage event=open app=%s", app_name(client));
   if (open_result) *open_result = APP_MSG_OK;
   return client;
 }
@@ -733,7 +659,6 @@ void app_message_client_close(AppMessageClient *client) {
     app_message_deregister_callbacks();
     s_open_client = NULL;
   }
-  APP_LOG(APP_LOG_LEVEL_INFO, "appmessage event=close app=%s", app_name(client));
   free(client);
 }
 
@@ -773,12 +698,10 @@ AppMessageStartResult app_message_client_start(
         ? APP_MESSAGE_START_COALESCED : APP_MESSAGE_START_BUSY;
   }
   if (!assign_request_id(client, request_id)) return APP_MESSAGE_START_INVALID;
-  bool wait_for_error_outbox = client->error_state == ERROR_OUTBOX;
-  if (client->error_state != ERROR_IDLE && !wait_for_error_outbox) {
-    cancel_timer(client);
+  if (client->error_state == ERROR_WAITING_ACK) {
     client->error_state = ERROR_IDLE;
-    client->error_attempts = 0;
   }
+  bool wait_for_error_outbox = client->error_state == ERROR_OUTBOX;
   client->active = true;
   client->status.operation = operation;
   client->operation_type = operation_type;
@@ -791,6 +714,7 @@ AppMessageStartResult app_message_client_start(
   client->busy_retries = 0;
   if (wait_for_error_outbox) {
     notify_state(client, APP_MESSAGE_CLIENT_BACKING_OFF);
+    arm_timer(client, OUTBOX_TIMEOUT_MS);
   } else if (client->phone_ready) {
     send_attempt(client);
   } else {

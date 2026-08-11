@@ -35,11 +35,13 @@ fun interface ErrorReporter {
                    sensitiveValues: () -> Collection<String> = { emptyList() }): ErrorReporter {
             require(source.isNotBlank())
             val app = context.applicationContext
-            return AndroidErrorReporter(source, Preferences(app),
-                ErrorJournal(FileStore(File(app.noBackupFilesDir, FILE))), sensitiveValues,
-                { policy -> schedule(app, policy) },
-                { WorkManager.getInstance(app).cancelUniqueWork(WORK) }, processState
-            ).also(::installUncaughtHandler)
+            return synchronized(reporters) { reporters.getOrPut(source) {
+                AndroidErrorReporter(source, Preferences(app),
+                    ErrorJournal(FileStore(File(app.noBackupFilesDir, FILE))), sensitiveValues,
+                    { policy -> schedule(app, policy) },
+                    { WorkManager.getInstance(app).cancelUniqueWork(WORK) },
+                ).also(::installUncaughtHandler)
+            } }
         }
 
         private fun schedule(context: Context, policy: ExistingWorkPolicy) {
@@ -48,7 +50,7 @@ fun interface ErrorReporter {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES).build()
             WorkManager.getInstance(context).enqueueUniqueWork(WORK, policy, request)
         }
-        private val processState = ReporterState()
+        private val reporters = mutableMapOf<String, ErrorReporter>()
         private val handlerLock = Any()
         private var handlerInstalled = false
         private fun installUncaughtHandler(reporter: ErrorReporter) = synchronized(handlerLock) {
@@ -62,20 +64,15 @@ fun interface ErrorReporter {
     }
 }
 
-internal data class Config(val enabled: Boolean = false, val key: String = "") {
-    val usable get() = enabled && key.isNotBlank()
-}
+internal data class Config(val key: String = "") { val usable get() = key.isNotBlank() }
 internal interface Settings { fun read(): Config; fun write(value: Config) }
 internal class Preferences(context: Context) : Settings {
     private val values = context.getSharedPreferences("pebble_errors", Context.MODE_PRIVATE)
-    override fun read() = Config(values.getBoolean("enabled_v1", false),
-        values.getString("key_v1", "").orEmpty())
-    override fun write(value: Config) { check(values.edit().putBoolean("enabled_v1", value.enabled)
-        .putString("key_v1", value.key).remove("url_v1").commit()) {
+    override fun read() = Config(values.getString("key_v1", "").orEmpty())
+    override fun write(value: Config) { check(values.edit().putString("key_v1", value.key)
+        .remove("enabled_v1").remove("url_v1").commit()) {
         "Could not save error-reporting settings." } }
 }
-
-internal class ReporterState { var forceDisabled = false }
 
 internal class ReportingUncaughtHandler(
     private val reporter: ErrorReporter,
@@ -97,44 +94,46 @@ internal class ReportingUncaughtHandler(
 internal class AndroidErrorReporter(
     private val source: String, private val settings: Settings, private val journal: ErrorJournal,
     private val secrets: () -> Collection<String>, private val schedule: (ExistingWorkPolicy) -> Unit,
-    private val cancel: () -> Unit, private val runtime: ReporterState = ReporterState(),
+    private val cancel: () -> Unit,
 ) : ErrorReporter {
+    private val lock = Any()
+    private var config = preserve(settings::read).getOrNull()?.takeIf(Config::usable)
+
     init {
-        synchronized(runtime) {
-            if (activeConfig() != null && preserve(journal::status).getOrNull()
-                    ?.let { it.queued + it.held > 0 } == true) {
+        synchronized(lock) {
+            if (config != null && preserve(journal::size).getOrDefault(0) > 0) {
                 preserve { schedule(ExistingWorkPolicy.KEEP) }
             }
         }
     }
 
-    override val enabled get() = synchronized(runtime) { activeConfig() != null }
+    override val enabled get() = synchronized(lock) { config != null }
 
-    override fun report(originalError: Any, whileDoing: String) = synchronized(runtime) {
-        val config = activeConfig() ?: return@synchronized
-        preserve { journal.add(Capture.error(source, whileDoing, originalError, secrets(config))) }
+    override fun report(originalError: Any, whileDoing: String) = synchronized(lock) {
+        val current = config ?: return@synchronized
+        preserve { journal.add(Capture.error(source, whileDoing, originalError, secrets(current))) }
             .onSuccess { preserve { schedule(ExistingWorkPolicy.KEEP) } }
     }
 
     override suspend fun importWatch(source: String, generation: Long, sequence: Long, atEpochSeconds: Long,
                                      payload: String, dropped: Long): Boolean {
-        return withContext(Dispatchers.IO) { synchronized(runtime) {
-            val config = activeConfig() ?: return@synchronized false
-            preserve { journal.add(Capture.watch(source, generation, sequence, atEpochSeconds, payload, dropped, secrets(config))) }
+        return withContext(Dispatchers.IO) { synchronized(lock) {
+            val current = config ?: return@synchronized false
+            preserve { journal.add(Capture.watch(source, generation, sequence, atEpochSeconds, payload, dropped, secrets(current))) }
                 .onSuccess { preserve { schedule(ExistingWorkPolicy.KEEP) } }.isSuccess
         } }
     }
 
-    override fun status(): ErrorReporter.Status = synchronized(runtime) {
-        val active = activeConfig() != null
-        val queued = if (active) preserve(journal::status).getOrNull()?.let { it.queued + it.held } ?: 0 else 0
+    override fun status(): ErrorReporter.Status = synchronized(lock) {
+        val active = config != null
+        val queued = if (active) preserve(journal::size).getOrDefault(0) else 0
         ErrorReporter.Status(active, queued)
     }
 
     override fun configure(enabled: Boolean, diagnosticKey: String?) {
         if (!enabled) {
-            synchronized(runtime) {
-                runtime.forceDisabled = true
+            synchronized(lock) {
+                config = null
                 val settingsFailure = runCatching { settings.write(Config()) }.exceptionOrNull()
                 preserve(cancel)
                 val clearFailure = preserve(journal::clear).exceptionOrNull()
@@ -142,23 +141,22 @@ internal class AndroidErrorReporter(
             }
             return
         }
-        synchronized(runtime) {
-            val previous = settings.read()
-            val key = diagnosticKey?.trim()?.takeIf(String::isNotBlank) ?: previous.key
+        synchronized(lock) {
+            val previous = config
+            val key = diagnosticKey?.trim()?.takeIf(String::isNotBlank) ?: previous?.key.orEmpty()
             require(key.isNotBlank()) { "A Diagnostic key is required." }
-            if (runtime.forceDisabled || !previous.usable) preserve(journal::clear).getOrThrow()
-            settings.write(Config(true, key)); runtime.forceDisabled = false
-            schedule(if (previous.usable && previous.key != key) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
+            if (previous == null) preserve(journal::clear).getOrThrow()
+            val next = Config(key)
+            settings.write(next); config = next
+            schedule(if (previous != null && previous.key != key) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
         }
     }
 
-    override fun sendNow() { synchronized(runtime) {
-        if (enabled) preserve { schedule(ExistingWorkPolicy.REPLACE) }
+    override fun sendNow() { synchronized(lock) {
+        if (config != null) preserve { schedule(ExistingWorkPolicy.REPLACE) }
     } }
-    override fun clear() = synchronized(runtime) { preserve(journal::clear); Unit }
+    override fun clear() = synchronized(lock) { preserve(journal::clear); Unit }
     override fun openSettings(activity: Activity, onChanged: () -> Unit) = settingsDialog(activity, this, onChanged)
-    private fun activeConfig() = if (runtime.forceDisabled) null else
-        preserve(settings::read).getOrNull()?.takeIf(Config::usable)
     private fun secrets(config: Config) = listOf(config.key) + runCatching(secrets).getOrDefault(emptyList())
     private fun <T> preserve(block: () -> T) = runCatching(block).onFailure { Log.e("PebbleErrors", "Could not preserve an error", it) }
 }

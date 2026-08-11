@@ -49,7 +49,6 @@ static AppMessageResponseAction receive_response(
 }
 
 AppMessageClientConfig config = {
-  .app_name = "example",
   .inbox_size = 1024,
   .outbox_size = 128,
   .protocol = {

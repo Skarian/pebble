@@ -163,6 +163,51 @@ test('one transient network failure retries the whole operation once', async () 
   assert.equal(requests.length, 5);
 });
 
+test('the fallback watchdog bounds a silent XHR without reporting timer cleanup noise', async () => {
+  const requests = [], pending = [], captured = [];
+  const Xhr = fakeXhr([() => {}, () => {}], requests);
+  const client = createClient(Xhr, memoryStorage(), {
+    requestTimeoutMs: 12000,
+    setTimer(callback) { pending.push(callback); return pending.length; },
+    clearTimer() {},
+    retryDelay: (callback) => callback(),
+    reportError: (error) => captured.push(error),
+  });
+  const resultPromise = fetchRecords(client);
+  assert.equal(pending.length, 1);
+  pending.shift()();
+  assert.equal(pending.length, 1);
+  pending.shift()();
+  const result = await resultPromise;
+
+  assert.equal(result.error.event, 'timeout');
+  assert.equal(result.error.attempts, 2);
+  assert.equal(captured.length, 2);
+  assert.ok(captured.every((error) => error.name === 'ResMedTransportError'));
+});
+
+test('a fallback watchdog scheduling exception is reported without blocking the request', async () => {
+  const requests = [], captured = [];
+  const timerError = new Error('native timer scheduling failed');
+  let firstTimer = true;
+  const client = createClient(fakeXhr(successFlow([]), requests), memoryStorage(), {
+    requestTimeoutMs: 12000,
+    setTimer() {
+      if (firstTimer) { firstTimer = false; throw timerError; }
+      return 1;
+    },
+    clearTimer() {},
+    reportError: (error, whileDoing, secrets) => captured.push({error, whileDoing, secrets}),
+  });
+  const result = await fetchRecords(client);
+
+  assert.equal(result.error, null);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].error, timerError);
+  assert.equal(captured[0].whileDoing, 'scheduling the ResMed request timer');
+  assert.ok(captured[0].secrets.includes('secret'));
+});
+
 test('rejected one-time authorization code restarts the full flow once', async () => {
   const requests = [];
   const captured = [];
